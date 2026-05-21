@@ -1,0 +1,62 @@
+[server]
+bind_address = "0.0.0.0:9898"
+
+[sonarr]
+base_url = "http://sonarr:8989"
+api_key = "replace-with-sonarr-api-key"
+# Optional. If set, Sonarr must call /webhooks/sonarr?token=... or send X-Rooterr-Token.
+webhook_token = "replace-with-random-token"
+
+[llm]
+# "ollama" or "openai_compatible"
+provider = "ollama"
+base_url = "http://ollama:11434"
+model = "gemma3:270m-it-qat"
+timeout_seconds = 60
+temperature = 0.0
+# api_key = "optional-openai-compatible-key"
+
+[metadata]
+# Optional. Classification still works from Sonarr metadata when these are omitted.
+# tmdb_bearer_token = "replace-with-tmdb-v4-read-token"
+# tvdb_api_key = "replace-with-tvdb-api-key"
+# tvdb_pin = "optional-tvdb-subscriber-pin"
+
+[classification]
+min_confidence = 0.55
+
+# Optional hints for root folders returned by Sonarr. Keys must exactly match Sonarr paths.
+[classification.root_folders."/data/anime"]
+label = "Anime"
+description = "Japanese animation, anime-style shows, and anime franchise series."
+
+[classification.root_folders."/data/documentary"]
+label = "Documentary"
+description = "Documentaries, factual, nature, history, science, and docuseries."
+
+[classification.root_folders."/data/kids"]
+label = "Kids"
+description = "Children's and family-oriented shows."
+
+[classification.root_folders."/data/miniseries"]
+label = "Miniseries"
+description = "Limited series, short-run event series, and single-season miniseries."
+
+[classification.root_folders."/data/reality"]
+label = "Reality"
+description = "Reality, competition, lifestyle, and unscripted entertainment."
+
+[classification.root_folders."/data/scripted"]
+label = "Scripted"
+description = "Default scripted drama, comedy, action, sci-fi, and general TV."
+
+[classification.root_folders."/data/sports"]
+label = "Sports"
+description = "Sports programming, sports documentaries, and competition broadcasts."
+
+[classification.root_folders."/data/talkshows"]
+label = "Talk Shows"
+description = "Talk shows, interviews, late-night, panel, and news discussion shows."
+
+[database]
+sqlite_path = "./rooterr.sqlite3"

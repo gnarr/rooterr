@@ -1,0 +1,4 @@
+target/
+.git/
+rooterr.sqlite3
+data/
