@@ -1,30 +1,39 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
     Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Redirect},
+    response::{
+        IntoResponse, Redirect,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use serde::Deserialize;
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
+    adapters::decision_events::DecisionEventPayload,
     bootstrap::AppServices,
     domain::decision::{Decision, DecisionStatus, LlmRun},
     use_cases::{
         accept_series_added::{AcceptSeriesAddedInput, AcceptSeriesAddedOutcome, IncomingSeries},
         retry_decision::RetryDecisionOutcome,
+        view_decision::DecisionView,
     },
 };
 
 pub fn router(services: Arc<AppServices>) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/events/decisions", get(decision_events))
         .route("/healthz", get(healthz))
+        .route("/decision-history/{id}/row", get(decision_history_row))
         .route("/webhooks/sonarr", post(sonarr_webhook))
         .route("/series/{id}", get(series_detail))
+        .route("/series/{id}/content", get(series_detail_content))
         .route("/series/{id}/retry", post(retry_series))
         .with_state(services)
 }
@@ -65,6 +74,21 @@ impl From<SonarrWebhookPayload> for AcceptSeriesAddedInput {
 
 async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, "ok")
+}
+
+async fn decision_events(
+    State(services): State<Arc<AppServices>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream = BroadcastStream::new(services.decision_events.subscribe()).filter_map(|event| {
+        let event = event.ok()?;
+        let payload = serde_json::to_string(&DecisionEventPayload::from(event)).ok()?;
+
+        Some(Ok(Event::default()
+            .event(event.kind.as_str())
+            .data(payload)))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
 async fn sonarr_webhook(
@@ -116,46 +140,36 @@ async fn index(State(services): State<Arc<AppServices>>) -> impl IntoResponse {
         Ok(decisions) => page(
             "Rooterr",
             html! {
-                h1 { "Rooterr" }
-                section class="panel" {
-                    h2 { "Decision History" }
-                    @if decisions.is_empty() {
-                        p class="muted" { "No Sonarr SeriesAdd webhooks have been processed yet." }
-                    } @else {
-                        table {
-                            thead {
-                                tr {
-                                    th { "Series" }
-                                    th { "Chosen Root" }
-                                    th { "Confidence" }
-                                    th { "Status" }
-                                    th { "Updated" }
-                                }
-                            }
-                            tbody {
-                                @for decision in &decisions {
-                                    tr {
-                                        td {
-                                            a href=(format!("/series/{}", decision.id)) {
-                                                (series_title(decision))
-                                            }
-                                        }
-                                        td { (decision.selected_root_folder_path.as_deref().unwrap_or("-")) }
-                                        td { (format_confidence(decision.confidence)) }
-                                        td { span class=(status_class(&decision.status)) { (decision.status.as_str()) } }
-                                        td { (&decision.updated_at) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                (decision_history(&decisions))
+                script { (PreEscaped(HISTORY_SCRIPT)) }
             },
         )
         .into_response(),
         Err(error) => {
             tracing::error!(error = %error, "failed to load decisions");
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to load decisions").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load decisions",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn decision_history_row(
+    State(services): State<Arc<AppServices>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match services.view_decision.decision(id).await {
+        Ok(Some(decision)) => history_row(&decision).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "decision not found").into_response(),
+        Err(error) => {
+            tracing::error!(id, error = %error, "failed to load decision history row");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load decision history row",
+            )
+                .into_response()
         }
     }
 }
@@ -172,51 +186,33 @@ async fn series_detail(
             return (StatusCode::INTERNAL_SERVER_ERROR, "failed to load decision").into_response();
         }
     };
-    let decision = decision_view.decision;
-    let metadata = decision_view.metadata_snapshot;
-    let llm_runs = decision_view.llm_runs;
-
     page(
-        &series_title(&decision),
+        &series_title(&decision_view.decision),
         html! {
             nav { a href="/" { "Decision History" } }
-            h1 { (series_title(&decision)) }
-            section class="panel grid" {
-                div { strong { "Status" } span class=(status_class(&decision.status)) { (decision.status.as_str()) } }
-                div { strong { "Chosen root" } span { (decision.selected_root_folder_path.as_deref().unwrap_or("-")) } }
-                div { strong { "Confidence" } span { (format_confidence(decision.confidence)) } }
-                div { strong { "Sonarr ID" } span { (decision.sonarr_series_id) } }
-                div { strong { "Old path" } span { (decision.old_path.as_deref().unwrap_or("-")) } }
-                div { strong { "Applied at" } span { (decision.applied_at.as_deref().unwrap_or("-")) } }
-            }
-            section class="panel" {
-                h2 { "Reason" }
-                p { (decision.reason.as_deref().unwrap_or("-")) }
-                @if let Some(error) = &decision.error {
-                    h2 { "Error" }
-                    pre class="error-block" { (error) }
-                }
-                form method="post" action=(format!("/series/{}/retry", decision.id)) {
-                    button type="submit" { "Retry classification" }
-                }
-            }
-            section class="panel" {
-                h2 { "LLM Runs" }
-                @for run in &llm_runs {
-                    (llm_run(run))
-                }
-            }
-            section class="panel" {
-                h2 { "Metadata Snapshot" }
-                @if let Some(metadata) = metadata {
-                    pre { (metadata) }
-                } @else {
-                    p class="muted" { "No metadata snapshot has been recorded yet." }
-                }
-            }
+            (series_content_region(&decision_view))
+            script { (PreEscaped(DETAIL_SCRIPT)) }
         },
     )
     .into_response()
+}
+
+async fn series_detail_content(
+    State(services): State<Arc<AppServices>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match services.view_decision.view(id).await {
+        Ok(Some(view)) => series_content(&view).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "decision not found").into_response(),
+        Err(error) => {
+            tracing::error!(id, error = %error, "failed to load series detail content");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load series detail content",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn retry_series(
@@ -289,6 +285,96 @@ fn page(title: &str, body: Markup) -> Markup {
     }
 }
 
+const HISTORY_SCRIPT: &str = r#"
+(() => {
+  const table = document.getElementById("decision-history-table");
+  const rows = document.getElementById("decision-history-rows");
+  const empty = document.getElementById("decision-history-empty");
+  if (!table || !rows || !window.EventSource) return;
+
+  const parseId = (event) => {
+    try {
+      return JSON.parse(event.data).id;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const fetchRow = async (id) => {
+    const response = await fetch(`/decision-history/${id}/row`, {
+      headers: { "X-Requested-With": "rooterr-live-update" }
+    });
+    if (!response.ok) return null;
+
+    const template = document.createElement("template");
+    template.innerHTML = await response.text();
+    return template.content.querySelector("tr");
+  };
+
+  const source = new EventSource("/events/decisions");
+  source.addEventListener("decision-created", async (event) => {
+    const id = parseId(event);
+    if (id == null) return;
+
+    const current = document.getElementById(`decision-row-${id}`);
+    const row = await fetchRow(id);
+    if (!row) return;
+
+    if (current) {
+      current.replaceWith(row);
+      return;
+    }
+
+    rows.prepend(row);
+    table.hidden = false;
+    if (empty) empty.hidden = true;
+
+    const limit = Number.parseInt(table.dataset.limit || "200", 10);
+    while (rows.children.length > limit) {
+      rows.lastElementChild?.remove();
+    }
+  });
+
+  source.addEventListener("decision-updated", async (event) => {
+    const id = parseId(event);
+    if (id == null) return;
+
+    const current = document.getElementById(`decision-row-${id}`);
+    if (!current) return;
+
+    const row = await fetchRow(id);
+    if (row) current.replaceWith(row);
+  });
+})();
+"#;
+
+const DETAIL_SCRIPT: &str = r#"
+(() => {
+  const content = document.getElementById("series-detail-content");
+  if (!content || !window.EventSource) return;
+
+  const id = Number.parseInt(content.dataset.decisionId || "", 10);
+  if (!Number.isFinite(id)) return;
+
+  const refresh = async (event) => {
+    try {
+      if (JSON.parse(event.data).id !== id) return;
+    } catch (_) {
+      return;
+    }
+
+    const response = await fetch(`/series/${id}/content`, {
+      headers: { "X-Requested-With": "rooterr-live-update" }
+    });
+    if (response.ok) content.innerHTML = await response.text();
+  };
+
+  const source = new EventSource("/events/decisions");
+  source.addEventListener("decision-created", refresh);
+  source.addEventListener("decision-updated", refresh);
+})();
+"#;
+
 fn llm_run(run: &LlmRun) -> Markup {
     html! {
         article class="run" {
@@ -307,6 +393,100 @@ fn llm_run(run: &LlmRun) -> Markup {
             @if let Some(raw) = &run.raw_response {
                 h4 { "Raw response" }
                 pre { (raw) }
+            }
+        }
+    }
+}
+
+fn history_row(decision: &Decision) -> Markup {
+    html! {
+        tr id=(format!("decision-row-{}", decision.id)) data-decision-id=(decision.id) {
+            td {
+                a href=(format!("/series/{}", decision.id)) {
+                    (series_title(decision))
+                }
+            }
+            td { (decision.selected_root_folder_path.as_deref().unwrap_or("-")) }
+            td { (format_confidence(decision.confidence)) }
+            td { span class=(status_class(&decision.status)) { (decision.status.as_str()) } }
+            td { (&decision.updated_at) }
+        }
+    }
+}
+
+fn decision_history(decisions: &[Decision]) -> Markup {
+    html! {
+        h1 { "Rooterr" }
+        section class="panel" {
+            h2 { "Decision History" }
+            p id="decision-history-empty" class="muted" hidden[!decisions.is_empty()] {
+                "No Sonarr SeriesAdd webhooks have been processed yet."
+            }
+            table id="decision-history-table" data-limit="200" hidden[decisions.is_empty()] {
+                thead {
+                    tr {
+                        th { "Series" }
+                        th { "Chosen Root" }
+                        th { "Confidence" }
+                        th { "Status" }
+                        th { "Updated" }
+                    }
+                }
+                tbody id="decision-history-rows" {
+                    @for decision in decisions {
+                        (history_row(decision))
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn series_content_region(view: &DecisionView) -> Markup {
+    html! {
+        div id="series-detail-content" data-decision-id=(view.decision.id) {
+            (series_content(view))
+        }
+    }
+}
+
+fn series_content(view: &DecisionView) -> Markup {
+    let decision = &view.decision;
+
+    html! {
+        h1 { (series_title(decision)) }
+        section class="panel grid" {
+            div { strong { "Status" } span class=(status_class(&decision.status)) { (decision.status.as_str()) } }
+            div { strong { "Chosen root" } span { (decision.selected_root_folder_path.as_deref().unwrap_or("-")) } }
+            div { strong { "Confidence" } span { (format_confidence(decision.confidence)) } }
+            div { strong { "Sonarr ID" } span { (decision.sonarr_series_id) } }
+            div { strong { "Old path" } span { (decision.old_path.as_deref().unwrap_or("-")) } }
+            div { strong { "Updated" } span { (&decision.updated_at) } }
+            div { strong { "Applied at" } span { (decision.applied_at.as_deref().unwrap_or("-")) } }
+        }
+        section class="panel" {
+            h2 { "Reason" }
+            p { (decision.reason.as_deref().unwrap_or("-")) }
+            @if let Some(error) = &decision.error {
+                h2 { "Error" }
+                pre class="error-block" { (error) }
+            }
+            form method="post" action=(format!("/series/{}/retry", decision.id)) {
+                button type="submit" { "Retry classification" }
+            }
+        }
+        section class="panel" {
+            h2 { "LLM Runs" }
+            @for run in &view.llm_runs {
+                (llm_run(run))
+            }
+        }
+        section class="panel" {
+            h2 { "Metadata Snapshot" }
+            @if let Some(metadata) = &view.metadata_snapshot {
+                pre { (metadata) }
+            } @else {
+                p class="muted" { "No metadata snapshot has been recorded yet." }
             }
         }
     }
@@ -453,6 +633,25 @@ button {
 mod tests {
     use super::*;
 
+    fn decision() -> Decision {
+        Decision {
+            id: 42,
+            instance_name: "sonarr".to_string(),
+            sonarr_series_id: 73,
+            title: Some("Bluey".to_string()),
+            year: Some(2018),
+            old_path: Some("/data/tv/Bluey".to_string()),
+            selected_root_folder_path: Some("/data/kids".to_string()),
+            confidence: Some(0.94),
+            reason: Some("Family series".to_string()),
+            status: DecisionStatus::Applying,
+            error: None,
+            created_at: "2026-05-22 12:00:00".to_string(),
+            updated_at: "2026-05-22 12:01:00".to_string(),
+            applied_at: None,
+        }
+    }
+
     #[test]
     fn deserializes_series_add_webhook() {
         let payload: SonarrWebhookPayload = serde_json::from_str(
@@ -486,5 +685,61 @@ mod tests {
 
         assert_eq!(payload.event_type, "Download");
         assert!(payload.series.is_none());
+    }
+
+    #[test]
+    fn decision_history_row_contains_live_fields() {
+        let rendered = history_row(&decision()).into_string();
+
+        assert!(rendered.contains(r#"id="decision-row-42""#));
+        assert!(rendered.contains(r#"data-decision-id="42""#));
+        assert!(rendered.contains("Bluey (2018)"));
+        assert!(rendered.contains("/data/kids"));
+        assert!(rendered.contains("94%"));
+        assert!(rendered.contains("status status-active"));
+        assert!(rendered.contains("2026-05-22 12:01:00"));
+    }
+
+    #[test]
+    fn decision_history_contains_empty_state_and_live_hooks() {
+        let rendered = decision_history(&[]).into_string();
+
+        assert!(rendered.contains(r#"id="decision-history-empty""#));
+        assert!(rendered.contains(r#"id="decision-history-table""#));
+        assert!(rendered.contains(r#"id="decision-history-rows""#));
+        assert!(rendered.contains("hidden"));
+        assert!(HISTORY_SCRIPT.contains("new EventSource(\"/events/decisions\")"));
+        assert!(HISTORY_SCRIPT.contains("decision-created"));
+        assert!(HISTORY_SCRIPT.contains("decision-updated"));
+    }
+
+    #[test]
+    fn detail_content_contains_current_state_and_live_hooks() {
+        let view = DecisionView {
+            decision: decision(),
+            metadata_snapshot: Some("{ \"title\": \"Bluey\" }".to_string()),
+            llm_runs: vec![LlmRun {
+                id: 9,
+                provider: "test".to_string(),
+                model: "model".to_string(),
+                prompt_hash: "hash".to_string(),
+                raw_response: None,
+                parsed_response: None,
+                duration_ms: Some(3),
+                error: None,
+                created_at: "2026-05-22 12:01:00".to_string(),
+            }],
+        };
+
+        let rendered = series_content_region(&view).into_string();
+
+        assert!(rendered.contains(r#"id="series-detail-content""#));
+        assert!(rendered.contains(r#"data-decision-id="42""#));
+        assert!(rendered.contains("Chosen root"));
+        assert!(rendered.contains("Updated"));
+        assert!(rendered.contains("LLM Runs"));
+        assert!(rendered.contains("Metadata Snapshot"));
+        assert!(DETAIL_SCRIPT.contains("new EventSource(\"/events/decisions\")"));
+        assert!(DETAIL_SCRIPT.contains("/content"));
     }
 }

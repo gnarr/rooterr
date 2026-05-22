@@ -5,8 +5,11 @@ use reqwest::Client;
 
 use crate::{
     adapters::{
-        llm::LocalLlmClassifier, metadata::ExternalMetadataProvider,
-        sonarr_http::SonarrHttpGateway, sqlite::SqliteDecisionRepository,
+        decision_events::{DecisionEventHub, NotifyingDecisionRepository},
+        llm::LocalLlmClassifier,
+        metadata::ExternalMetadataProvider,
+        sonarr_http::SonarrHttpGateway,
+        sqlite::SqliteDecisionRepository,
     },
     config::Config,
     ports::{
@@ -27,6 +30,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AppServices {
     pub webhook_token: Option<String>,
+    pub decision_events: DecisionEventHub,
     pub accept_series_added: AcceptSeriesAdded,
     pub process_series_decision: ProcessSeriesDecision,
     pub retry_decision: RetryDecision,
@@ -41,8 +45,13 @@ impl AppServices {
             .build()
             .context("failed to build HTTP client")?;
 
-        let repository: Arc<dyn DecisionRepository> =
+        let decision_events = DecisionEventHub::new();
+        let sqlite_repository: Arc<dyn DecisionRepository> =
             Arc::new(SqliteDecisionRepository::new(&config.database.sqlite_path)?);
+        let repository: Arc<dyn DecisionRepository> = Arc::new(NotifyingDecisionRepository::new(
+            sqlite_repository,
+            decision_events.clone(),
+        ));
         let sonarr: Arc<dyn SonarrGateway> =
             Arc::new(SonarrHttpGateway::new(http.clone(), &config.sonarr));
         let metadata: Arc<dyn MetadataProvider> = Arc::new(ExternalMetadataProvider::new(
@@ -62,6 +71,7 @@ impl AppServices {
 
         Ok(Self {
             webhook_token: config.sonarr.webhook_token,
+            decision_events,
             accept_series_added: AcceptSeriesAdded::new(repository.clone()),
             process_series_decision: ProcessSeriesDecision::new(
                 repository.clone(),

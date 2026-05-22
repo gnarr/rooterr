@@ -24,8 +24,12 @@ impl ViewDecision {
         Self { repository }
     }
 
+    pub async fn decision(&self, decision_id: i64) -> Result<Option<Decision>> {
+        self.repository.decision(decision_id).await
+    }
+
     pub async fn view(&self, decision_id: i64) -> Result<Option<DecisionView>> {
-        let Some(decision) = self.repository.decision(decision_id).await? else {
+        let Some(decision) = self.decision(decision_id).await? else {
             return Ok(None);
         };
         let metadata_snapshot = self
