@@ -11,10 +11,12 @@ use crate::{
     config::Config,
     ports::{
         classifier::Classifier, decision_repository::DecisionRepository,
-        metadata_provider::MetadataProvider, sonarr_gateway::SonarrGateway,
+        llm_model_provisioner::LlmModelProvisioner, metadata_provider::MetadataProvider,
+        sonarr_gateway::SonarrGateway,
     },
     use_cases::{
         accept_series_added::AcceptSeriesAdded,
+        ensure_llm_model_ready::EnsureLlmModelReady,
         list_decisions::ListDecisions,
         process_series_decision::{ClassificationPolicy, ProcessSeriesDecision},
         retry_decision::RetryDecision,
@@ -33,7 +35,7 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    pub fn new(config: Config) -> Result<Self> {
+    pub async fn new(config: Config) -> Result<Self> {
         let http = Client::builder()
             .user_agent(concat!("rooterr/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -47,7 +49,12 @@ impl AppServices {
             http.clone(),
             &config.metadata,
         ));
-        let classifier: Arc<dyn Classifier> = Arc::new(LocalLlmClassifier::new(http, &config.llm));
+        let llm = Arc::new(LocalLlmClassifier::new(http, &config.llm));
+        if config.llm.auto_pull {
+            let provisioner: Arc<dyn LlmModelProvisioner> = llm.clone();
+            EnsureLlmModelReady::new(provisioner).execute().await?;
+        }
+        let classifier: Arc<dyn Classifier> = llm;
         let policy = ClassificationPolicy {
             min_confidence: config.classification.min_confidence,
             root_folders: config.classification.root_folders.clone(),

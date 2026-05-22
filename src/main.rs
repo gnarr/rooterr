@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         .bind_address
         .parse()
         .with_context(|| format!("invalid bind address {}", config.server.bind_address))?;
-    let services = Arc::new(AppServices::new(config)?);
+    let services = Arc::new(AppServices::new(config).await?);
     let app = adapters::web::router(services);
     let listener = TcpListener::bind(bind_address)
         .await

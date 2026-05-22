@@ -458,6 +458,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creates_missing_database_directory_and_file() {
+        let temp = TempDir::new().expect("temp dir");
+        let data_dir = temp.path().join("missing-data-dir");
+        let db_path = data_dir.join("rooterr.sqlite3");
+
+        assert!(!data_dir.exists());
+        assert!(!db_path.exists());
+
+        let repo = SqliteDecisionRepository::new(&db_path).expect("repo");
+
+        assert!(data_dir.is_dir());
+        assert!(db_path.is_file());
+
+        let inserted = repo
+            .insert_decision_if_absent(&series_added())
+            .await
+            .expect("insert");
+        assert!(inserted.created);
+        assert_eq!(repo.list_decisions(10).await.expect("list").len(), 1);
+    }
+
+    #[tokio::test]
     async fn status_transitions_snapshots_and_llm_runs_are_persisted() {
         let (_temp, repo) = repository();
         let inserted = repo

@@ -12,6 +12,14 @@ webhook_token = "replace-with-random-token"
 provider = "ollama"
 base_url = "http://ollama:11434"
 model = "gemma3:270m-it-qat"
+auto_pull = true
+startup_wait_seconds = 60
+pull_timeout_seconds = 900
+auto_num_ctx = true
+min_num_ctx = 4096
+# 0 means auto-detect the selected model's context length from Ollama.
+max_num_ctx = 0
+reserved_output_tokens = 512
 timeout_seconds = 60
 temperature = 0.0
 # api_key = "optional-openai-compatible-key"
@@ -59,4 +67,4 @@ label = "Talk Shows"
 description = "Talk shows, interviews, late-night, panel, and news discussion shows."
 
 [database]
-sqlite_path = "./rooterr.sqlite3"
+sqlite_path = "./data/rooterr.sqlite3"

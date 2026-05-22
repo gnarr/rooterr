@@ -7,7 +7,7 @@ services:
       - "9898:9898"
     volumes:
       - ./rooterr.toml:/config/rooterr.toml:ro
-      - ./data:/data
+      - ./data:/app/data
     environment:
       ROOTERR_CONFIG: /config/rooterr.toml
     depends_on:

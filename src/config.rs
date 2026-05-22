@@ -38,6 +38,13 @@ pub struct LlmConfig {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
+    pub auto_pull: bool,
+    pub startup_wait_seconds: u64,
+    pub pull_timeout_seconds: u64,
+    pub auto_num_ctx: bool,
+    pub min_num_ctx: u32,
+    pub max_num_ctx: u32,
+    pub reserved_output_tokens: u32,
     pub timeout_seconds: u64,
     pub temperature: f32,
 }
@@ -110,6 +117,22 @@ impl Config {
         set_string("ROOTERR_LLM_BASE_URL", &mut self.llm.base_url);
         set_string("ROOTERR_LLM_MODEL", &mut self.llm.model);
         set_option_string("ROOTERR_LLM_API_KEY", &mut self.llm.api_key);
+        set_bool("ROOTERR_LLM_AUTO_PULL", &mut self.llm.auto_pull)?;
+        set_u64(
+            "ROOTERR_LLM_STARTUP_WAIT_SECONDS",
+            &mut self.llm.startup_wait_seconds,
+        )?;
+        set_u64(
+            "ROOTERR_LLM_PULL_TIMEOUT_SECONDS",
+            &mut self.llm.pull_timeout_seconds,
+        )?;
+        set_bool("ROOTERR_LLM_AUTO_NUM_CTX", &mut self.llm.auto_num_ctx)?;
+        set_u32("ROOTERR_LLM_MIN_NUM_CTX", &mut self.llm.min_num_ctx)?;
+        set_u32("ROOTERR_LLM_MAX_NUM_CTX", &mut self.llm.max_num_ctx)?;
+        set_u32(
+            "ROOTERR_LLM_RESERVED_OUTPUT_TOKENS",
+            &mut self.llm.reserved_output_tokens,
+        )?;
         set_u64("ROOTERR_LLM_TIMEOUT_SECONDS", &mut self.llm.timeout_seconds)?;
         set_f32("ROOTERR_LLM_TEMPERATURE", &mut self.llm.temperature)?;
 
@@ -140,6 +163,18 @@ impl Config {
             bail!("llm.model is required");
         }
 
+        if self.llm.min_num_ctx == 0 {
+            bail!("llm.min_num_ctx must be greater than 0");
+        }
+
+        if self.llm.max_num_ctx > 0 && self.llm.max_num_ctx < self.llm.min_num_ctx {
+            bail!("llm.max_num_ctx must be 0 or greater than or equal to llm.min_num_ctx");
+        }
+
+        if self.llm.reserved_output_tokens == 0 {
+            bail!("llm.reserved_output_tokens must be greater than 0");
+        }
+
         if !(0.0..=1.0).contains(&self.classification.min_confidence) {
             bail!("classification.min_confidence must be between 0.0 and 1.0");
         }
@@ -152,8 +187,15 @@ impl LlmConfig {
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_seconds)
     }
-}
 
+    pub fn startup_wait_timeout(&self) -> Duration {
+        Duration::from_secs(self.startup_wait_seconds)
+    }
+
+    pub fn pull_timeout(&self) -> Duration {
+        Duration::from_secs(self.pull_timeout_seconds)
+    }
+}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -180,12 +222,18 @@ impl Default for LlmConfig {
             base_url: "http://localhost:11434".to_string(),
             model: "gemma3:270m-it-qat".to_string(),
             api_key: None,
+            auto_pull: false,
+            startup_wait_seconds: 60,
+            pull_timeout_seconds: 900,
+            auto_num_ctx: true,
+            min_num_ctx: 4096,
+            max_num_ctx: 0,
+            reserved_output_tokens: 512,
             timeout_seconds: 60,
             temperature: 0.0,
         }
     }
 }
-
 
 impl Default for ClassificationConfig {
     fn default() -> Self {
@@ -199,7 +247,7 @@ impl Default for ClassificationConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            sqlite_path: PathBuf::from("./rooterr.sqlite3"),
+            sqlite_path: PathBuf::from("./data/rooterr.sqlite3"),
         }
     }
 }
@@ -220,7 +268,28 @@ fn set_option_string(key: &str, target: &mut Option<String>) {
     }
 }
 
+fn set_bool(key: &str, target: &mut bool) -> Result<()> {
+    if let Ok(value) = env::var(key) {
+        let normalized = value.trim().to_ascii_lowercase();
+        *target = match normalized.as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => bail!("{key} must be a boolean"),
+        };
+    }
+    Ok(())
+}
+
 fn set_u64(key: &str, target: &mut u64) -> Result<()> {
+    if let Ok(value) = env::var(key) {
+        *target = value
+            .parse()
+            .with_context(|| format!("{key} must be an integer"))?;
+    }
+    Ok(())
+}
+
+fn set_u32(key: &str, target: &mut u32) -> Result<()> {
     if let Ok(value) = env::var(key) {
         *target = value
             .parse()
@@ -245,4 +314,50 @@ fn set_f64(key: &str, target: &mut f64) -> Result<()> {
             .with_context(|| format!("{key} must be a float"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn llm_auto_pull_defaults_are_backward_compatible() {
+        let config = Config::default();
+
+        assert!(!config.llm.auto_pull);
+        assert_eq!(config.llm.startup_wait_seconds, 60);
+        assert_eq!(config.llm.pull_timeout_seconds, 900);
+        assert!(config.llm.auto_num_ctx);
+        assert_eq!(config.llm.min_num_ctx, 4096);
+        assert_eq!(config.llm.max_num_ctx, 0);
+        assert_eq!(config.llm.reserved_output_tokens, 512);
+    }
+
+    #[test]
+    fn llm_auto_pull_fields_parse_from_toml() {
+        let config = toml::from_str::<Config>(
+            r#"
+            [sonarr]
+            api_key = "test-key"
+
+            [llm]
+            auto_pull = true
+            startup_wait_seconds = 12
+            pull_timeout_seconds = 34
+            auto_num_ctx = false
+            min_num_ctx = 8192
+            max_num_ctx = 32768
+            reserved_output_tokens = 1024
+            "#,
+        )
+        .expect("parse config");
+
+        assert!(config.llm.auto_pull);
+        assert_eq!(config.llm.startup_wait_seconds, 12);
+        assert_eq!(config.llm.pull_timeout_seconds, 34);
+        assert!(!config.llm.auto_num_ctx);
+        assert_eq!(config.llm.min_num_ctx, 8192);
+        assert_eq!(config.llm.max_num_ctx, 32768);
+        assert_eq!(config.llm.reserved_output_tokens, 1024);
+    }
 }
