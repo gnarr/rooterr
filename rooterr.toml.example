@@ -11,7 +11,7 @@ webhook_token = "replace-with-random-token"
 # "ollama" or "openai_compatible"
 provider = "ollama"
 base_url = "http://ollama:11434"
-model = "gemma3:270m-it-qat"
+model = "qwen3:0.6b"
 auto_pull = true
 startup_wait_seconds = 60
 pull_timeout_seconds = 900
