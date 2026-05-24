@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.1.1](https://github.com/gnarr/rooterr/compare/c076764ccfe123e4f1169deaf4ffdda16897cf21..0.1.1) - 2026-05-24
+#### Bug Fixes
+- (**ci**) name digest image outputs - ([1340d9e](https://github.com/gnarr/rooterr/commit/1340d9e435cf3aba5eca670e974e725566d5bb68)) - Gunnar Cortes Heimisson
+#### Continuous Integration
+- (**release**) split multi-arch image publishing - ([c076764](https://github.com/gnarr/rooterr/commit/c076764ccfe123e4f1169deaf4ffdda16897cf21)) - Gunnar Cortes Heimisson
+
+- - -
+
 ## [0.1.0](https://github.com/gnarr/rooterr/compare/fcac5f1f034c88dde9ca8fa0657ea1bcd6b49493..0.1.0) - 2026-05-24
 #### Features
 - (**config**) support root folder hints from env - ([4a7079a](https://github.com/gnarr/rooterr/commit/4a7079accfeb4c6617f1b908e6540d552ed918b2)) - Gunnar Cortes Heimisson
