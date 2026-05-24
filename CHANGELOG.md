@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.1.2](https://github.com/gnarr/rooterr/compare/2425d27d1a87763519d97c4f62ec9a307978246e..0.1.2) - 2026-05-24
+#### Bug Fixes
+- (**ci**) split digest image outputs - ([2425d27](https://github.com/gnarr/rooterr/commit/2425d27d1a87763519d97c4f62ec9a307978246e)) - Gunnar Cortes Heimisson
+
+- - -
+
 ## [0.1.1](https://github.com/gnarr/rooterr/compare/c076764ccfe123e4f1169deaf4ffdda16897cf21..0.1.1) - 2026-05-24
 #### Bug Fixes
 - (**ci**) name digest image outputs - ([1340d9e](https://github.com/gnarr/rooterr/commit/1340d9e435cf3aba5eca670e974e725566d5bb68)) - Gunnar Cortes Heimisson
