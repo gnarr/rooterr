@@ -48,6 +48,7 @@ impl LocalLlmClassifier {
             "model": self.config.model,
             "stream": false,
             "format": "json",
+            "think": self.config.think,
             "messages": messages,
             "options": Value::Object(options)
         });
@@ -872,6 +873,7 @@ mod tests {
             .find(|request| request.method.as_str() == "POST" && request.url.path() == "/api/chat")
             .expect("chat request");
         let body: Value = chat_request.body_json().expect("chat body");
+        assert_eq!(body["think"], json!(false));
         assert_eq!(body["options"]["num_ctx"], json!(4096));
     }
 
@@ -911,7 +913,51 @@ mod tests {
             .find(|request| request.method.as_str() == "POST" && request.url.path() == "/api/chat")
             .expect("chat request");
         let body: Value = chat_request.body_json().expect("chat body");
+        assert_eq!(body["think"], json!(false));
         assert_eq!(body["options"]["num_ctx"], json!(8192));
+    }
+
+    #[tokio::test]
+    async fn ollama_chat_sends_configured_think_flag() {
+        let server = MockServer::start().await;
+        let mut config = ollama_config(server.uri());
+        config.think = true;
+        config.timeout_seconds = 5;
+        let classifier = LocalLlmClassifier::new(Client::new(), &config);
+
+        Mock::given(method("POST"))
+            .and(path("/api/show"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model_info": {
+                    "gemma3.context_length": 32768
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "message": { "content": "{}" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        classifier
+            .call_ollama(&[ChatMessage {
+                role: "user",
+                content: "short prompt".to_string(),
+            }])
+            .await
+            .expect("ollama response");
+
+        let requests = server.received_requests().await.expect("request recording");
+        let chat_request = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST" && request.url.path() == "/api/chat")
+            .expect("chat request");
+        let body: Value = chat_request.body_json().expect("chat body");
+        assert_eq!(body["think"], json!(true));
     }
 
     #[tokio::test]
@@ -949,6 +995,7 @@ mod tests {
         let body: Value = request.body_json().expect("chat body");
         assert!(body.get("options").is_none());
         assert!(body.get("num_ctx").is_none());
+        assert!(body.get("think").is_none());
     }
 
     #[test]

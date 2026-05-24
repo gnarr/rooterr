@@ -46,6 +46,7 @@ This means Docker deployments can be configured entirely with environment variab
 | `ROOTERR_LLM_AUTO_PULL` | `llm.auto_pull` |
 | `ROOTERR_LLM_STARTUP_WAIT_SECONDS` | `llm.startup_wait_seconds` |
 | `ROOTERR_LLM_PULL_TIMEOUT_SECONDS` | `llm.pull_timeout_seconds` |
+| `ROOTERR_LLM_THINK` | `llm.think` |
 | `ROOTERR_LLM_AUTO_NUM_CTX` | `llm.auto_num_ctx` |
 | `ROOTERR_LLM_MIN_NUM_CTX` | `llm.min_num_ctx` |
 | `ROOTERR_LLM_MAX_NUM_CTX` | `llm.max_num_ctx` |
@@ -138,6 +139,7 @@ model = "gemma3:270m-it-qat"
 auto_pull = true
 startup_wait_seconds = 60
 pull_timeout_seconds = 900
+think = false
 auto_num_ctx = true
 min_num_ctx = 4096
 max_num_ctx = 0
