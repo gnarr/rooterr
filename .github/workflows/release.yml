@@ -24,6 +24,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_EDIT_VERSION: 0.13.10
   DOCKERHUB_IMAGE: gnarr/rooterr
   GHCR_IMAGE: ghcr.io/gnarr/rooterr
 
@@ -176,9 +177,21 @@ jobs:
         if: steps.release_input.outputs.mode == 'auto'
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-edit
+      - name: Restore cargo-edit
+        id: cargo_edit_cache
         if: steps.release_input.outputs.mode == 'auto'
-        run: cargo install cargo-edit --locked
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-set-version
+          key: cargo-edit-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_EDIT_VERSION }}
+
+      - name: Install cargo-edit
+        if: steps.release_input.outputs.mode == 'auto' && steps.cargo_edit_cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-edit --version "$CARGO_EDIT_VERSION" --locked
+
+      - name: Verify cargo-edit
+        if: steps.release_input.outputs.mode == 'auto'
+        run: cargo set-version --version
 
       - name: Determine release version
         id: release_plan
