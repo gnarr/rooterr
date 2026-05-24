@@ -192,16 +192,11 @@ jobs:
           fi
 
           should_release=false
-          non_space_regex='[^[:space:]]'
           bump_subject_regex='^(feat|fix|perf)(\([^)]+\))?!?:'
           breaking_subject_regex='^[A-Za-z]+(\([^)]+\))?!:'
           breaking_footer_regex='^BREAKING[ -]CHANGE:'
-          while IFS= read -r -d $'\036' commit; do
-            if [[ ! "$commit" =~ $non_space_regex ]]; then
-              continue
-            fi
-
-            subject="$(printf '%s' "$commit" | sed -n '1p')"
+          while IFS= read -r commit_sha; do
+            subject="$(git log --max-count=1 --format=%s "$commit_sha")"
             if [[ "$subject" =~ $bump_subject_regex ]]; then
               should_release=true
               break
@@ -212,11 +207,12 @@ jobs:
               break
             fi
 
+            commit="$(git log --max-count=1 --format=%B "$commit_sha")"
             if grep -Eq "$breaking_footer_regex" <<< "$commit"; then
               should_release=true
               break
             fi
-          done < <(git log "$range" --format='%B%x1e')
+          done < <(git rev-list "$range")
 
           if [ "$should_release" != "true" ]; then
             {
