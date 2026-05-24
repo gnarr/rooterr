@@ -349,8 +349,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push digest images
-        id: build
+      - name: Build and push Docker Hub digest image
+        id: build_dockerhub
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -360,38 +360,60 @@ jobs:
             org.opencontainers.image.title=Rooterr
             org.opencontainers.image.description=Rust companion service for Sonarr root folder classification
             org.opencontainers.image.source=https://github.com/gnarr/rooterr
-          outputs: |
-            type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.artifact }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
 
+      - name: Build and push GHCR digest image
+        id: build_ghcr
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.title=Rooterr
+            org.opencontainers.image.description=Rust companion service for Sonarr root folder classification
+            org.opencontainers.image.source=https://github.com/gnarr/rooterr
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.artifact }}
+
       - name: Export image digest
         env:
-          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
-          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
+          DOCKERHUB_DIGEST: ${{ steps.build_dockerhub.outputs.digest }}
+          DOCKERHUB_METADATA: ${{ steps.build_dockerhub.outputs.metadata }}
+          GHCR_DIGEST: ${{ steps.build_ghcr.outputs.digest }}
+          GHCR_METADATA: ${{ steps.build_ghcr.outputs.metadata }}
         run: |
           set -euo pipefail
 
-          digest="$BUILD_DIGEST"
-          if [ -z "$digest" ] && [ -n "$BUILD_METADATA" ]; then
-            digest="$(jq -r '."containerimage.digest" // .["containerimage.descriptor"].digest // empty' <<< "$BUILD_METADATA")"
-          fi
+          write_digest() {
+            local registry="$1"
+            local digest="$2"
+            local metadata="$3"
 
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Docker build did not return a valid image digest." >&2
-            echo "$BUILD_METADATA" >&2
-            exit 1
-          fi
+            if [ -z "$digest" ] && [ -n "$metadata" ]; then
+              digest="$(jq -r '."containerimage.digest" // .["containerimage.descriptor"].digest // empty' <<< "$metadata")"
+            fi
 
-          mkdir -p "$RUNNER_TEMP/digests"
-          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Docker build for $registry did not return a valid image digest." >&2
+              echo "$metadata" >&2
+              exit 1
+            fi
+
+            mkdir -p "$RUNNER_TEMP/digests/$registry"
+            touch "$RUNNER_TEMP/digests/$registry/${digest#sha256:}"
+          }
+
+          write_digest dockerhub "$DOCKERHUB_DIGEST" "$DOCKERHUB_METADATA"
+          write_digest ghcr "$GHCR_DIGEST" "$GHCR_METADATA"
 
       - name: Upload image digest
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ runner.temp }}/digests/*
+          path: ${{ runner.temp }}/digests/**
           if-no-files-found: error
           retention-days: 1
 
@@ -462,15 +484,34 @@ jobs:
           set -euo pipefail
 
           shopt -s nullglob
-          digest_files=("$RUNNER_TEMP"/digests/*)
-          if [ "${#digest_files[@]}" -eq 0 ]; then
-            echo "No image digest artifacts were downloaded." >&2
+          dockerhub_digest_files=("$RUNNER_TEMP"/digests/dockerhub/*)
+          ghcr_digest_files=("$RUNNER_TEMP"/digests/ghcr/*)
+          if [ "${#dockerhub_digest_files[@]}" -eq 0 ]; then
+            echo "No Docker Hub image digest artifacts were downloaded." >&2
+            exit 1
+          fi
+
+          if [ "${#ghcr_digest_files[@]}" -eq 0 ]; then
+            echo "No GHCR image digest artifacts were downloaded." >&2
             exit 1
           fi
 
           mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           for tag in "${tags[@]}"; do
             image="${tag%:*}"
+            case "$tag" in
+              "$DOCKERHUB_IMAGE":*)
+                digest_files=("${dockerhub_digest_files[@]}")
+                ;;
+              "$GHCR_IMAGE":*)
+                digest_files=("${ghcr_digest_files[@]}")
+                ;;
+              *)
+                echo "Unexpected Docker metadata tag: $tag" >&2
+                exit 1
+                ;;
+            esac
+
             refs=()
             for digest_file in "${digest_files[@]}"; do
               refs+=("$image@sha256:$(basename "$digest_file")")
