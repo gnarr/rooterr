@@ -367,10 +367,23 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
 
       - name: Export image digest
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
         run: |
           set -euo pipefail
 
-          digest="${{ steps.build.outputs.digest }}"
+          digest="$BUILD_DIGEST"
+          if [ -z "$digest" ] && [ -n "$BUILD_METADATA" ]; then
+            digest="$(jq -r '."containerimage.digest" // .["containerimage.descriptor"].digest // empty' <<< "$BUILD_METADATA")"
+          fi
+
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Docker build did not return a valid image digest." >&2
+            echo "$BUILD_METADATA" >&2
+            exit 1
+          fi
+
           mkdir -p "$RUNNER_TEMP/digests"
           touch "$RUNNER_TEMP/digests/${digest#sha256:}"
 
