@@ -22,6 +22,60 @@ Rooterr is a small Rust companion service for Sonarr. It listens for Sonarr `Ser
 
 Rooterr creates the SQLite database automatically on startup when it is missing. By default it stores the database at `./data/rooterr.sqlite3`; the parent `data/` directory is created automatically.
 
+## Environment Configuration
+
+Rooterr loads configuration in this order:
+
+1. Built-in defaults.
+2. `rooterr.toml`, or the file pointed to by `ROOTERR_CONFIG`, when the file exists.
+3. `ROOTERR_*` environment variables.
+
+This means Docker deployments can be configured entirely with environment variables and do not need to mount a TOML file. Supported environment variables:
+
+| Variable | TOML setting |
+| --- | --- |
+| `ROOTERR_CONFIG` | Path to an optional TOML config file |
+| `ROOTERR_SERVER_BIND_ADDRESS` | `server.bind_address` |
+| `ROOTERR_SONARR_BASE_URL` | `sonarr.base_url` |
+| `ROOTERR_SONARR_API_KEY` | `sonarr.api_key` |
+| `ROOTERR_SONARR_WEBHOOK_TOKEN` | `sonarr.webhook_token` |
+| `ROOTERR_LLM_PROVIDER` | `llm.provider` (`ollama` or `openai_compatible`) |
+| `ROOTERR_LLM_BASE_URL` | `llm.base_url` |
+| `ROOTERR_LLM_MODEL` | `llm.model` |
+| `ROOTERR_LLM_API_KEY` | `llm.api_key` |
+| `ROOTERR_LLM_AUTO_PULL` | `llm.auto_pull` |
+| `ROOTERR_LLM_STARTUP_WAIT_SECONDS` | `llm.startup_wait_seconds` |
+| `ROOTERR_LLM_PULL_TIMEOUT_SECONDS` | `llm.pull_timeout_seconds` |
+| `ROOTERR_LLM_AUTO_NUM_CTX` | `llm.auto_num_ctx` |
+| `ROOTERR_LLM_MIN_NUM_CTX` | `llm.min_num_ctx` |
+| `ROOTERR_LLM_MAX_NUM_CTX` | `llm.max_num_ctx` |
+| `ROOTERR_LLM_RESERVED_OUTPUT_TOKENS` | `llm.reserved_output_tokens` |
+| `ROOTERR_LLM_TIMEOUT_SECONDS` | `llm.timeout_seconds` |
+| `ROOTERR_LLM_TEMPERATURE` | `llm.temperature` |
+| `ROOTERR_TMDB_BEARER_TOKEN` | `metadata.tmdb_bearer_token` |
+| `ROOTERR_TVDB_API_KEY` | `metadata.tvdb_api_key` |
+| `ROOTERR_TVDB_PIN` | `metadata.tvdb_pin` |
+| `ROOTERR_DATABASE_SQLITE_PATH` | `database.sqlite_path` |
+| `ROOTERR_CLASSIFICATION_MIN_CONFIDENCE` | `classification.min_confidence` |
+| `ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON` | `classification.root_folders` |
+
+Boolean values accept `1`, `true`, `yes`, `on`, `0`, `false`, `no`, and `off`. Empty optional secret values clear the setting.
+
+Use `ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON` for root-folder hints:
+
+```json
+{
+  "/data/kids": {
+    "label": "Kids",
+    "description": "Children's and family-oriented shows."
+  },
+  "/data/scripted": {
+    "label": "Scripted",
+    "description": "Default scripted drama, comedy, action, sci-fi, and general TV."
+  }
+}
+```
+
 ## Sonarr Webhook
 
 In Sonarr, create a dedicated Webhook connection for Rooterr:
@@ -128,8 +182,17 @@ src/
 ## Docker Compose
 
 ```bash
-cp rooterr.toml.example rooterr.toml
 docker compose -f docker-compose.example.yml up --build
 ```
 
-The example Compose file mounts `./data` to `/app/data`, matching the default `database.sqlite_path = "./data/rooterr.sqlite3"` from `rooterr.toml.example`.
+The example Compose file configures Rooterr entirely with environment variables and mounts only `./data` to `/app/data`, matching the default `database.sqlite_path = "./data/rooterr.sqlite3"`.
+
+For file-based deployments, keep using `rooterr.toml` and set `ROOTERR_CONFIG` to the mounted path:
+
+```yaml
+volumes:
+  - ./rooterr.toml:/config/rooterr.toml:ro
+  - ./data:/app/data
+environment:
+  ROOTERR_CONFIG: /config/rooterr.toml
+```

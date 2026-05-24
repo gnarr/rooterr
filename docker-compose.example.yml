@@ -6,10 +6,50 @@ services:
     ports:
       - "9898:9898"
     volumes:
-      - ./rooterr.toml:/config/rooterr.toml:ro
       - ./data:/app/data
     environment:
-      ROOTERR_CONFIG: /config/rooterr.toml
+      ROOTERR_SONARR_BASE_URL: http://sonarr:8989
+      ROOTERR_SONARR_API_KEY: replace-with-sonarr-api-key
+      ROOTERR_SONARR_WEBHOOK_TOKEN: replace-with-random-token
+      ROOTERR_LLM_PROVIDER: ollama
+      ROOTERR_LLM_BASE_URL: http://ollama:11434
+      ROOTERR_LLM_MODEL: qwen3:0.6b
+      ROOTERR_LLM_AUTO_PULL: "true"
+      ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON: |
+        {
+          "/data/anime": {
+            "label": "Anime",
+            "description": "Japanese animation, anime-style shows, and anime franchise series."
+          },
+          "/data/documentary": {
+            "label": "Documentary",
+            "description": "Documentaries, factual, nature, history, science, and docuseries."
+          },
+          "/data/kids": {
+            "label": "Kids",
+            "description": "Children's and family-oriented shows."
+          },
+          "/data/miniseries": {
+            "label": "Miniseries",
+            "description": "Limited series, short-run event series, and single-season miniseries."
+          },
+          "/data/reality": {
+            "label": "Reality",
+            "description": "Reality, competition, lifestyle, and unscripted entertainment."
+          },
+          "/data/scripted": {
+            "label": "Scripted",
+            "description": "Default scripted drama, comedy, action, sci-fi, and general TV."
+          },
+          "/data/sports": {
+            "label": "Sports",
+            "description": "Sports programming, sports documentaries, and competition broadcasts."
+          },
+          "/data/talkshows": {
+            "label": "Talk Shows",
+            "description": "Talk shows, interviews, late-night, panel, and news discussion shows."
+          }
+        }
     depends_on:
       - ollama
 

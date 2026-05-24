@@ -150,6 +150,10 @@ impl Config {
             "ROOTERR_CLASSIFICATION_MIN_CONFIDENCE",
             &mut self.classification.min_confidence,
         )?;
+        if let Ok(root_folders) = env::var("ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON") {
+            self.classification.root_folders = serde_json::from_str(&root_folders)
+                .context("ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON must be a JSON object")?;
+        }
 
         Ok(())
     }
@@ -319,6 +323,9 @@ fn set_f64(key: &str, target: &mut f64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn llm_auto_pull_defaults_are_backward_compatible() {
@@ -359,5 +366,203 @@ mod tests {
         assert_eq!(config.llm.min_num_ctx, 8192);
         assert_eq!(config.llm.max_num_ctx, 32768);
         assert_eq!(config.llm.reserved_output_tokens, 1024);
+    }
+
+    #[test]
+    fn env_overrides_scalar_config_values() {
+        let _guard = lock_env();
+        clear_rooterr_env();
+        set_env("ROOTERR_SONARR_API_KEY", "env-sonarr-key");
+        set_env("ROOTERR_SONARR_WEBHOOK_TOKEN", "");
+        set_env("ROOTERR_LLM_PROVIDER", "openai_compatible");
+        set_env("ROOTERR_LLM_MODEL", "env-model");
+        set_env("ROOTERR_LLM_AUTO_PULL", "true");
+        set_env("ROOTERR_LLM_TEMPERATURE", "0.25");
+        set_env("ROOTERR_CLASSIFICATION_MIN_CONFIDENCE", "0.7");
+        set_env("ROOTERR_DATABASE_SQLITE_PATH", "/tmp/rooterr-env.sqlite3");
+
+        let mut config = toml::from_str::<Config>(
+            r#"
+            [sonarr]
+            api_key = "toml-sonarr-key"
+            webhook_token = "toml-token"
+
+            [llm]
+            provider = "ollama"
+            model = "toml-model"
+            auto_pull = false
+            temperature = 0.0
+
+            [classification]
+            min_confidence = 0.55
+
+            [database]
+            sqlite_path = "/tmp/rooterr-toml.sqlite3"
+            "#,
+        )
+        .expect("parse config");
+
+        config.apply_env().expect("apply env");
+
+        assert_eq!(config.sonarr.api_key, "env-sonarr-key");
+        assert_eq!(config.sonarr.webhook_token, None);
+        assert!(matches!(config.llm.provider, LlmProvider::OpenAiCompatible));
+        assert_eq!(config.llm.model, "env-model");
+        assert!(config.llm.auto_pull);
+        assert_eq!(config.llm.temperature, 0.25);
+        assert_eq!(config.classification.min_confidence, 0.7);
+        assert_eq!(
+            config.database.sqlite_path,
+            PathBuf::from("/tmp/rooterr-env.sqlite3")
+        );
+
+        clear_rooterr_env();
+    }
+
+    #[test]
+    fn env_root_folder_json_parses_hints() {
+        let _guard = lock_env();
+        clear_rooterr_env();
+        set_env(
+            "ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON",
+            r#"{
+                "/data/kids": {
+                    "label": "Kids",
+                    "description": "Children's and family-oriented shows."
+                },
+                "/data/scripted": {
+                    "label": "Scripted",
+                    "description": "Default scripted television."
+                }
+            }"#,
+        );
+
+        let mut config = Config::default();
+        config.apply_env().expect("apply env");
+
+        assert_eq!(
+            config.classification.root_folders["/data/kids"]
+                .label
+                .as_deref(),
+            Some("Kids")
+        );
+        assert_eq!(
+            config.classification.root_folders["/data/kids"]
+                .description
+                .as_deref(),
+            Some("Children's and family-oriented shows.")
+        );
+        assert_eq!(
+            config.classification.root_folders["/data/scripted"]
+                .label
+                .as_deref(),
+            Some("Scripted")
+        );
+
+        clear_rooterr_env();
+    }
+
+    #[test]
+    fn invalid_env_root_folder_json_names_variable() {
+        let _guard = lock_env();
+        clear_rooterr_env();
+        set_env("ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON", "not-json");
+
+        let mut config = Config::default();
+        let err = config.apply_env().expect_err("invalid root folder json");
+
+        assert!(
+            err.to_string()
+                .contains("ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON")
+        );
+
+        clear_rooterr_env();
+    }
+
+    #[test]
+    fn env_root_folder_json_replaces_toml_hints() {
+        let _guard = lock_env();
+        clear_rooterr_env();
+        set_env(
+            "ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON",
+            r#"{
+                "/data/env": {
+                    "label": "Env",
+                    "description": "Configured from environment."
+                }
+            }"#,
+        );
+
+        let mut config = toml::from_str::<Config>(
+            r#"
+            [sonarr]
+            api_key = "test-key"
+
+            [classification.root_folders."/data/toml"]
+            label = "TOML"
+            description = "Configured from TOML."
+            "#,
+        )
+        .expect("parse config");
+
+        config.apply_env().expect("apply env");
+
+        assert!(
+            !config
+                .classification
+                .root_folders
+                .contains_key("/data/toml")
+        );
+        assert_eq!(
+            config.classification.root_folders["/data/env"]
+                .description
+                .as_deref(),
+            Some("Configured from environment.")
+        );
+
+        clear_rooterr_env();
+    }
+
+    fn lock_env() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().expect("env lock")
+    }
+
+    fn set_env(key: &str, value: &str) {
+        unsafe { env::set_var(key, value) };
+    }
+
+    fn remove_env(key: &str) {
+        unsafe { env::remove_var(key) };
+    }
+
+    fn clear_rooterr_env() {
+        for key in [
+            "ROOTERR_CONFIG",
+            "ROOTERR_SERVER_BIND_ADDRESS",
+            "ROOTERR_SONARR_BASE_URL",
+            "ROOTERR_SONARR_API_KEY",
+            "ROOTERR_SONARR_WEBHOOK_TOKEN",
+            "ROOTERR_LLM_PROVIDER",
+            "ROOTERR_LLM_BASE_URL",
+            "ROOTERR_LLM_MODEL",
+            "ROOTERR_LLM_API_KEY",
+            "ROOTERR_LLM_AUTO_PULL",
+            "ROOTERR_LLM_STARTUP_WAIT_SECONDS",
+            "ROOTERR_LLM_PULL_TIMEOUT_SECONDS",
+            "ROOTERR_LLM_AUTO_NUM_CTX",
+            "ROOTERR_LLM_MIN_NUM_CTX",
+            "ROOTERR_LLM_MAX_NUM_CTX",
+            "ROOTERR_LLM_RESERVED_OUTPUT_TOKENS",
+            "ROOTERR_LLM_TIMEOUT_SECONDS",
+            "ROOTERR_LLM_TEMPERATURE",
+            "ROOTERR_TMDB_BEARER_TOKEN",
+            "ROOTERR_TVDB_API_KEY",
+            "ROOTERR_TVDB_PIN",
+            "ROOTERR_DATABASE_SQLITE_PATH",
+            "ROOTERR_CLASSIFICATION_MIN_CONFIDENCE",
+            "ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON",
+        ] {
+            remove_env(key);
+        }
     }
 }
