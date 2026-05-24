@@ -135,7 +135,7 @@ For Ollama, Rooterr can automatically pull the configured model before the web s
 [llm]
 provider = "ollama"
 base_url = "http://ollama:11434"
-model = "gemma3:270m-it-qat"
+model = "qwen3:0.6b"
 auto_pull = true
 startup_wait_seconds = 60
 pull_timeout_seconds = 900
@@ -149,7 +149,7 @@ reserved_output_tokens = 512
 The first startup can take several minutes and requires the Ollama container to have internet access. `startup_wait_seconds` lets Rooterr wait for the Ollama service before checking local models, and `pull_timeout_seconds` controls the download timeout. The model is stored in the Ollama volume, so later restarts should skip the download. If you prefer to manage models manually, leave `auto_pull = false` and pull the model yourself:
 
 ```bash
-docker exec ollama ollama pull gemma3:270m-it-qat
+docker exec ollama ollama pull qwen3:0.6b
 ```
 
 When `auto_num_ctx = true`, Rooterr estimates the final classification prompt size and sends an Ollama-only `options.num_ctx` value rounded up to a stable context bucket. `max_num_ctx = 0` lets Rooterr detect the model limit from Ollama; set a positive value to override it.

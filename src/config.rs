@@ -226,7 +226,7 @@ impl Default for LlmConfig {
         Self {
             provider: LlmProvider::Ollama,
             base_url: "http://localhost:11434".to_string(),
-            model: "gemma3:270m-it-qat".to_string(),
+            model: "qwen3:0.6b".to_string(),
             api_key: None,
             auto_pull: false,
             startup_wait_seconds: 60,
