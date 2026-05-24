@@ -1,0 +1,380 @@
+name: Release
+
+"on":
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing SemVer tag to republish. Leave empty to create the next release.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  DOCKERHUB_IMAGE: gnarr/rooterr
+  GHCR_IMAGE: ghcr.io/gnarr/rooterr
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Normalize workflow input
+        id: release_input
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          version="$(printf '%s' "${REQUESTED_VERSION:-}" | tr -d '[:space:]')"
+          if [ -n "$version" ]; then
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+              echo "Manual republish version must be a numeric SemVer tag, got: $version" >&2
+              exit 1
+            fi
+
+            {
+              echo "mode=republish"
+              echo "version=$version"
+            } >> "$GITHUB_OUTPUT"
+            echo "Republishing existing release tag: $version"
+          else
+            {
+              echo "mode=auto"
+              echo "version="
+            } >> "$GITHUB_OUTPUT"
+            echo "Creating the next automatic release."
+          fi
+
+      - name: Checkout release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.release_input.outputs.mode == 'republish' && steps.release_input.outputs.version || 'main' }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Ensure release tag
+        if: steps.release_input.outputs.mode == 'republish'
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release_input.outputs.version }}"
+          git fetch origin --tags
+          git rev-parse --verify "refs/tags/$version^{commit}" >/dev/null
+          git checkout --detach "$version"
+
+      - name: Ensure main branch
+        if: steps.release_input.outputs.mode == 'auto'
+        run: |
+          set -euo pipefail
+
+          git fetch origin main --tags
+          git checkout -B main origin/main
+
+      - name: Determine release commit range
+        id: release_range
+        if: steps.release_input.outputs.mode == 'auto'
+        run: |
+          set -euo pipefail
+
+          latest_tag="$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || true)"
+          if [ -n "$latest_tag" ]; then
+            check_range="$latest_tag..HEAD"
+            log_range="$check_range"
+            root_commit=""
+            echo "Latest SemVer tag: $latest_tag"
+            echo "Checking commits in range: $check_range"
+          else
+            latest_tag=""
+            root_commit="$(git rev-list --max-parents=0 HEAD)"
+            check_range="$root_commit..HEAD"
+            log_range="HEAD"
+            echo "No SemVer tag found. Checking all commits for the initial release."
+          fi
+
+          {
+            echo "latest_tag=$latest_tag"
+            echo "check_range=$check_range"
+            echo "log_range=$log_range"
+            echo "root_commit=$root_commit"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Conventional commit check
+        if: steps.release_input.outputs.mode == 'auto'
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          command: check
+          args: ${{ steps.release_range.outputs.check_range }}
+          git-user: github-actions[bot]
+          git-user-email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Install Cocogitto for republish
+        if: steps.release_input.outputs.mode == 'republish'
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          command: check
+          git-user: github-actions[bot]
+          git-user-email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Expose Cocogitto executable
+        run: |
+          set -euo pipefail
+
+          if command -v cog >/dev/null 2>&1; then
+            cog --version
+            exit 0
+          fi
+
+          cog_path=""
+          for candidate in "$HOME/.local/bin/cog" "$HOME/.cargo/bin/cog" "$RUNNER_TEMP/cog"; do
+            if [ -x "$candidate" ]; then
+              cog_path="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$cog_path" ]; then
+            echo "Cocogitto was not found after cocogitto-action installed it." >&2
+            exit 1
+          fi
+
+          dirname "$cog_path" >> "$GITHUB_PATH"
+          "$cog_path" --version
+
+      - name: Initial commit check
+        if: steps.release_input.outputs.mode == 'auto' && steps.release_range.outputs.root_commit != ''
+        run: |
+          set -euo pipefail
+
+          message_path="$RUNNER_TEMP/root-commit-message.txt"
+          git log --max-count=1 --format=%B "${{ steps.release_range.outputs.root_commit }}" > "$message_path"
+          cog verify --file "$message_path"
+
+      - name: Install Rust
+        if: steps.release_input.outputs.mode == 'auto'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-edit
+        if: steps.release_input.outputs.mode == 'auto'
+        run: cargo install cargo-edit --locked
+
+      - name: Determine release version
+        id: release_plan
+        if: steps.release_input.outputs.mode == 'auto'
+        run: |
+          set -euo pipefail
+
+          latest_tag="${{ steps.release_range.outputs.latest_tag }}"
+          range="${{ steps.release_range.outputs.log_range }}"
+          if [ -z "$range" ]; then
+            echo "Release commit range was not determined." >&2
+            exit 1
+          fi
+
+          should_release=false
+          non_space_regex='[^[:space:]]'
+          bump_subject_regex='^(feat|fix|perf)(\([^)]+\))?!?:'
+          breaking_subject_regex='^[A-Za-z]+(\([^)]+\))?!:'
+          breaking_footer_regex='^BREAKING[ -]CHANGE:'
+          while IFS= read -r -d $'\036' commit; do
+            if [[ ! "$commit" =~ $non_space_regex ]]; then
+              continue
+            fi
+
+            subject="$(printf '%s' "$commit" | sed -n '1p')"
+            if [[ "$subject" =~ $bump_subject_regex ]]; then
+              should_release=true
+              break
+            fi
+
+            if [[ "$subject" =~ $breaking_subject_regex ]]; then
+              should_release=true
+              break
+            fi
+
+            if grep -Eq "$breaking_footer_regex" <<< "$commit"; then
+              should_release=true
+              break
+            fi
+          done < <(git log "$range" --format='%B%x1e')
+
+          if [ "$should_release" != "true" ]; then
+            {
+              echo "should_release=false"
+              echo "version="
+            } >> "$GITHUB_OUTPUT"
+            if [ -z "$latest_tag" ]; then
+              echo "No SemVer-bumping conventional commits found in the repository history. Skipping release."
+            else
+              echo "No SemVer-bumping conventional commits found since $latest_tag. Skipping release."
+            fi
+            exit 0
+          fi
+
+          version="$(cog bump --dry-run --auto | tail -n 1 | tr -d '[:space:]')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Cocogitto returned an invalid SemVer version: $version" >&2
+            exit 1
+          fi
+
+          {
+            echo "should_release=true"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Next release version: $version"
+
+      - name: Create release commit and tag
+        if: steps.release_plan.outputs.should_release == 'true'
+        run: cog bump --auto
+
+      - name: Push release commit and tag
+        if: steps.release_plan.outputs.should_release == 'true'
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release_plan.outputs.version }}"
+          git push origin HEAD:main
+          git push origin "refs/tags/$version"
+
+      - name: Select release version
+        id: release
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.release_input.outputs.mode }}" = "republish" ]; then
+            {
+              echo "should_publish=true"
+              echo "version=${{ steps.release_input.outputs.version }}"
+              echo "mode=republish"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ steps.release_plan.outputs.should_release }}" = "true" ]; then
+            {
+              echo "should_publish=true"
+              echo "version=${{ steps.release_plan.outputs.version }}"
+              echo "mode=auto"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "should_publish=false"
+              echo "version="
+              echo "mode=auto"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        id: release_notes
+        if: steps.release.outputs.should_publish == 'true'
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release.outputs.version }}"
+          notes_path="$RUNNER_TEMP/release-notes-$version.md"
+          cog changelog --at "$version" > "$notes_path"
+
+          {
+            echo ""
+            echo "## Container images"
+            echo ""
+            echo "- \`docker pull $DOCKERHUB_IMAGE:$version\`"
+            echo "- \`docker pull $GHCR_IMAGE:$version\`"
+          } >> "$notes_path"
+
+          echo "notes_path=$notes_path" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        if: steps.release.outputs.should_publish == 'true'
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        if: steps.release.outputs.should_publish == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        if: steps.release.outputs.should_publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        if: steps.release.outputs.should_publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: docker_meta
+        if: steps.release.outputs.should_publish == 'true'
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.release.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.version }}
+            type=semver,pattern={{major}},value=${{ steps.release.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Rooterr
+            org.opencontainers.image.description=Rust companion service for Sonarr root folder classification
+            org.opencontainers.image.source=https://github.com/gnarr/rooterr
+
+      - name: Build and push Docker images
+        if: steps.release.outputs.should_publish == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: true
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish Docker Hub README
+        if: steps.release.outputs.should_publish == 'true'
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          readme-filepath: ./README.md
+          short-description: Rust companion service for Sonarr root folder classification
+
+      - name: Publish GitHub release
+        if: steps.release.outputs.should_publish == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.release.outputs.version }}
+          name: ${{ steps.release.outputs.version }}
+          body_path: ${{ steps.release_notes.outputs.notes_path }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
