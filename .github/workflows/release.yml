@@ -356,14 +356,11 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
-          tags: |
-            ${{ env.DOCKERHUB_IMAGE }}
-            ${{ env.GHCR_IMAGE }}
           labels: |
             org.opencontainers.image.title=Rooterr
             org.opencontainers.image.description=Rust companion service for Sonarr root folder classification
             org.opencontainers.image.source=https://github.com/gnarr/rooterr
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name="${{ env.DOCKERHUB_IMAGE }},${{ env.GHCR_IMAGE }}",push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.artifact }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
 
