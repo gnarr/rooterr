@@ -683,7 +683,7 @@ mod tests {
     fn ollama_config(base_url: String) -> LlmConfig {
         LlmConfig {
             base_url,
-            model: "gemma3:270m-it-qat".to_string(),
+            model: "qwen3:0.6b".to_string(),
             auto_pull: true,
             startup_wait_seconds: 0,
             pull_timeout_seconds: 5,
@@ -713,7 +713,7 @@ mod tests {
     fn context_length_is_parsed_from_ollama_show_response() {
         let value = json!({
             "model_info": {
-                "gemma3.context_length": 32768
+                "qwen3.context_length": 32768
             }
         });
 
@@ -729,7 +729,7 @@ mod tests {
             .and(path("/api/tags"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "models": [
-                    { "name": "gemma3:270m-it-qat" }
+                    { "name": "qwen3:0.6b" }
                 ]
             })))
             .expect(1)
@@ -764,7 +764,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/api/pull"))
             .and(body_json(json!({
-                "model": "gemma3:270m-it-qat",
+                "model": "qwen3:0.6b",
                 "stream": false
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(
             body,
             json!({
-                "model": "gemma3:270m-it-qat",
+                "model": "qwen3:0.6b",
                 "stream": false
             })
         );
@@ -844,7 +844,7 @@ mod tests {
             .and(path("/api/show"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "model_info": {
-                    "gemma3.context_length": 32768
+                    "qwen3.context_length": 32768
                 }
             })))
             .expect(1)
@@ -929,7 +929,7 @@ mod tests {
             .and(path("/api/show"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "model_info": {
-                    "gemma3.context_length": 32768
+                    "qwen3.context_length": 32768
                 }
             })))
             .mount(&server)
