@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.1.4](https://github.com/gnarr/rooterr/compare/a0c9e0d4a48101d3985e0cf96cfe273127de1964..0.1.4) - 2026-05-24
+#### Bug Fixes
+- (**ci**) track release digests per registry - ([a0c9e0d](https://github.com/gnarr/rooterr/commit/a0c9e0d4a48101d3985e0cf96cfe273127de1964)) - Gunnar Cortes Heimisson
+
+- - -
+
 ## [0.1.3](https://github.com/gnarr/rooterr/compare/11de23dce45d9e43fef767927154ffbed0386abf..0.1.3) - 2026-05-24
 #### Bug Fixes
 - (**ci**) fall back to build metadata digest - ([11de23d](https://github.com/gnarr/rooterr/commit/11de23dce45d9e43fef767927154ffbed0386abf)) - Gunnar Cortes Heimisson
