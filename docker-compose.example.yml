@@ -15,6 +15,7 @@ services:
       ROOTERR_LLM_BASE_URL: http://ollama:11434
       ROOTERR_LLM_MODEL: qwen3:0.6b
       ROOTERR_LLM_AUTO_PULL: "true"
+      ROOTERR_LLM_THINK: "false"
       ROOTERR_CLASSIFICATION_ROOT_FOLDERS_JSON: |
         {
           "/data/anime": {

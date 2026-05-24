@@ -41,6 +41,7 @@ pub struct LlmConfig {
     pub auto_pull: bool,
     pub startup_wait_seconds: u64,
     pub pull_timeout_seconds: u64,
+    pub think: bool,
     pub auto_num_ctx: bool,
     pub min_num_ctx: u32,
     pub max_num_ctx: u32,
@@ -126,6 +127,7 @@ impl Config {
             "ROOTERR_LLM_PULL_TIMEOUT_SECONDS",
             &mut self.llm.pull_timeout_seconds,
         )?;
+        set_bool("ROOTERR_LLM_THINK", &mut self.llm.think)?;
         set_bool("ROOTERR_LLM_AUTO_NUM_CTX", &mut self.llm.auto_num_ctx)?;
         set_u32("ROOTERR_LLM_MIN_NUM_CTX", &mut self.llm.min_num_ctx)?;
         set_u32("ROOTERR_LLM_MAX_NUM_CTX", &mut self.llm.max_num_ctx)?;
@@ -229,6 +231,7 @@ impl Default for LlmConfig {
             auto_pull: false,
             startup_wait_seconds: 60,
             pull_timeout_seconds: 900,
+            think: false,
             auto_num_ctx: true,
             min_num_ctx: 4096,
             max_num_ctx: 0,
@@ -334,6 +337,7 @@ mod tests {
         assert!(!config.llm.auto_pull);
         assert_eq!(config.llm.startup_wait_seconds, 60);
         assert_eq!(config.llm.pull_timeout_seconds, 900);
+        assert!(!config.llm.think);
         assert!(config.llm.auto_num_ctx);
         assert_eq!(config.llm.min_num_ctx, 4096);
         assert_eq!(config.llm.max_num_ctx, 0);
@@ -351,6 +355,7 @@ mod tests {
             auto_pull = true
             startup_wait_seconds = 12
             pull_timeout_seconds = 34
+            think = true
             auto_num_ctx = false
             min_num_ctx = 8192
             max_num_ctx = 32768
@@ -362,6 +367,7 @@ mod tests {
         assert!(config.llm.auto_pull);
         assert_eq!(config.llm.startup_wait_seconds, 12);
         assert_eq!(config.llm.pull_timeout_seconds, 34);
+        assert!(config.llm.think);
         assert!(!config.llm.auto_num_ctx);
         assert_eq!(config.llm.min_num_ctx, 8192);
         assert_eq!(config.llm.max_num_ctx, 32768);
@@ -377,6 +383,7 @@ mod tests {
         set_env("ROOTERR_LLM_PROVIDER", "openai_compatible");
         set_env("ROOTERR_LLM_MODEL", "env-model");
         set_env("ROOTERR_LLM_AUTO_PULL", "true");
+        set_env("ROOTERR_LLM_THINK", "false");
         set_env("ROOTERR_LLM_TEMPERATURE", "0.25");
         set_env("ROOTERR_CLASSIFICATION_MIN_CONFIDENCE", "0.7");
         set_env("ROOTERR_DATABASE_SQLITE_PATH", "/tmp/rooterr-env.sqlite3");
@@ -391,6 +398,7 @@ mod tests {
             provider = "ollama"
             model = "toml-model"
             auto_pull = false
+            think = true
             temperature = 0.0
 
             [classification]
@@ -409,6 +417,7 @@ mod tests {
         assert!(matches!(config.llm.provider, LlmProvider::OpenAiCompatible));
         assert_eq!(config.llm.model, "env-model");
         assert!(config.llm.auto_pull);
+        assert!(!config.llm.think);
         assert_eq!(config.llm.temperature, 0.25);
         assert_eq!(config.classification.min_confidence, 0.7);
         assert_eq!(
@@ -549,6 +558,7 @@ mod tests {
             "ROOTERR_LLM_AUTO_PULL",
             "ROOTERR_LLM_STARTUP_WAIT_SECONDS",
             "ROOTERR_LLM_PULL_TIMEOUT_SECONDS",
+            "ROOTERR_LLM_THINK",
             "ROOTERR_LLM_AUTO_NUM_CTX",
             "ROOTERR_LLM_MIN_NUM_CTX",
             "ROOTERR_LLM_MAX_NUM_CTX",
