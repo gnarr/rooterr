@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.2.2](https://github.com/gnarr/rooterr/compare/7b09026b6373a84218892819559b67c58318de26..0.2.2) - 2026-06-04
+#### Bug Fixes
+- (**classification**) restore conservative miniseries routing - ([081d19b](https://github.com/gnarr/rooterr/commit/081d19b9d859034343ca9de09e38d46419c1533e)) - Gunnar Cortes
+#### Continuous Integration
+- bump cache and upload-artifact versions - ([7b09026](https://github.com/gnarr/rooterr/commit/7b09026b6373a84218892819559b67c58318de26)) - Gunnar Cortes
+
+- - -
+
 ## [0.2.1](https://github.com/gnarr/rooterr/compare/da9761dbbc04a4bc070b2365f82bc0ab8faa80a7..0.2.1) - 2026-06-04
 #### Bug Fixes
 - (**status**) move configured model into llm article - ([da9761d](https://github.com/gnarr/rooterr/commit/da9761dbbc04a4bc070b2365f82bc0ab8faa80a7)) - Gunnar Cortes
