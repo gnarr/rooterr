@@ -489,15 +489,20 @@ fn status_content(view: &StatusPageView) -> Markup {
         }
         section class="panel" {
             h2 { "Dependencies" }
-            (status_section("Sonarr", Some(&view.sonarr_base_url), &view.sonarr))
+            (status_section(
+                "Sonarr",
+                Some(&view.sonarr_base_url),
+                None,
+                &view.sonarr,
+            ))
             (status_section(
                 "LLM",
                 Some(&format!("{} / {}", view.llm_provider, view.llm_base_url)),
+                Some(html! { p class="muted" { "Configured model: " code { (&view.llm_model) } } }),
                 &view.llm,
             ))
-            p class="muted" { "Configured model: " code { (&view.llm_model) } }
-            (status_section("TMDB", None, &view.tmdb))
-            (status_section("TVDB", None, &view.tvdb))
+            (status_section("TMDB", None, None, &view.tmdb))
+            (status_section("TVDB", None, None, &view.tvdb))
         }
         section class="panel" {
             h2 { "Root Folders" }
@@ -513,7 +518,12 @@ fn status_content(view: &StatusPageView) -> Markup {
     }
 }
 
-fn status_section(title: &str, subtitle: Option<&str>, section: &StatusSection) -> Markup {
+fn status_section(
+    title: &str,
+    subtitle: Option<&str>,
+    footer: Option<Markup>,
+    section: &StatusSection,
+) -> Markup {
     html! {
         article class="status-block" {
             div class="status-block-header" {
@@ -533,6 +543,9 @@ fn status_section(title: &str, subtitle: Option<&str>, section: &StatusSection) 
             }
             @if let Some(error) = &section.error {
                 pre class="error-block" { (error) }
+            }
+            @if let Some(footer) = footer {
+                (footer)
             }
         }
     }
@@ -975,6 +988,13 @@ mod tests {
         };
 
         let rendered = status_content(&view).into_string();
+        let llm_start = rendered.find("<h3>LLM</h3>").expect("LLM section missing");
+        let configured_model = rendered
+            .find("Configured model")
+            .expect("configured model note missing");
+        let tmdb_start = rendered
+            .find("<h3>TMDB</h3>")
+            .expect("TMDB section missing");
 
         assert!(rendered.contains("System Status"));
         assert!(rendered.contains("Sonarr ok"));
@@ -984,5 +1004,7 @@ mod tests {
         assert!(rendered.contains("No decisions have been recorded yet."));
         assert!(rendered.contains("Configured classification root folders"));
         assert!(rendered.contains("Sonarr did not return any root folders."));
+        assert!(llm_start < configured_model);
+        assert!(configured_model < tmdb_start);
     }
 }
