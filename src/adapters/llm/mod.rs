@@ -541,7 +541,8 @@ fn build_messages(
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted. ",
                 "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
-                "Treat miniseries as a structural hint, not a content-type override: documentary beats miniseries, reality beats scripted, and clear scripted evidence can still belong in scripted even when miniseries metadata is present. ",
+                "Treat miniseries as a structural hint, not a content-type override: documentary beats miniseries, reality beats scripted or miniseries, and clear scripted evidence can still belong in scripted when miniseries metadata is weak or ambiguous. ",
+                "When limited-series metadata is strongly corroborated by short-run structure, limited-series season naming, or cross-provider support, prefer miniseries over generic scripted. ",
                 "Animation alone is not a kids signal. ",
                 "Prefer obvious categories like anime, documentary, kids, miniseries, reality, scripted, sports, or talkshows when the metadata supports them."
             )
@@ -565,6 +566,8 @@ fn eligible_root_folders(
     let explicit_documentary = metadata.has_explicit_documentary_evidence();
     let explicit_reality = metadata.has_explicit_reality_evidence();
     let has_reality_root = root_folders.iter().any(is_reality_root_folder);
+    let strong_miniseries = metadata.has_strong_explicit_miniseries_evidence();
+    let has_miniseries_root = root_folders.iter().any(is_miniseries_root_folder);
 
     root_folders
         .iter()
@@ -576,6 +579,10 @@ fn eligible_root_folders(
                     || !has_reality_root
                     || !is_scripted_or_miniseries_root_folder(folder)
                     || is_reality_root_folder(folder))
+                && (!strong_miniseries
+                    || !has_miniseries_root
+                    || !is_scripted_or_miniseries_root_folder(folder)
+                    || is_miniseries_root_folder(folder))
         })
         .cloned()
         .collect()
@@ -618,6 +625,17 @@ fn validate_grounded_classification(
     {
         bail!(
             "LLM selected scripted root '{}' despite explicit reality metadata evidence",
+            folder.path
+        );
+    }
+
+    let has_miniseries_root = root_folders.iter().any(is_miniseries_root_folder);
+    if is_scripted_root_folder(folder)
+        && metadata.has_strong_explicit_miniseries_evidence()
+        && has_miniseries_root
+    {
+        bail!(
+            "LLM selected scripted root '{}' despite strong explicit miniseries metadata evidence",
             folder.path
         );
     }
@@ -1310,6 +1328,7 @@ mod tests {
         assert!(system_prompt.contains("Never invent kids evidence"));
         assert!(system_prompt.contains("choose reality over scripted"));
         assert!(system_prompt.contains("Treat miniseries as a structural hint"));
+        assert!(system_prompt.contains("strongly corroborated"));
     }
 
     #[test]
@@ -1695,6 +1714,93 @@ mod tests {
     }
 
     #[test]
+    fn strong_miniseries_metadata_only_offers_miniseries_over_scripted() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Witness (2026)",
+                "genres": ["Drama", "Mini-Series"],
+                "seriesType": "standard",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 3 }
+            }),
+            tmdb: Some(json!({
+                "name": "The Witness",
+                "type": "Miniseries",
+                "genres": [{ "name": "Drama" }, { "name": "Crime" }],
+                "keywords": { "results": [{ "name": "miniseries" }, { "name": "murder" }] },
+                "number_of_episodes": 3,
+                "seasons": [{ "name": "Limited Series", "season_number": 1, "episode_count": 3 }]
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "The Witness (2026)",
+                        "type": { "name": "Mini-Series" },
+                        "genres": [{ "name": "Mini-Series" }, { "name": "Drama" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(
+            eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/miniseries")
+        );
+        assert!(!eligible.iter().any(|folder| folder.path == "/tv/scripted"));
+    }
+
+    #[test]
+    fn scripted_classification_is_rejected_when_miniseries_is_strong() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Witness (2026)",
+                "genres": ["Drama", "Mini-Series"],
+                "seriesType": "standard",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 3 }
+            }),
+            tmdb: Some(json!({
+                "name": "The Witness",
+                "type": "Miniseries",
+                "number_of_episodes": 3,
+                "seasons": [{ "name": "Limited Series", "season_number": 1, "episode_count": 3 }]
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "type": { "name": "Mini-Series" },
+                        "genres": [{ "name": "Mini-Series" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let classification = Classification {
+            root_folder_path: "/tv/scripted".to_string(),
+            confidence: 0.25,
+            reason: "Standard scripted format.".to_string(),
+            signals: vec!["seriesType: standard".to_string()],
+        };
+
+        let error = validate_grounded_classification(&classification, &metadata, &root_folders)
+            .expect_err("ungrounded scripted classification");
+
+        assert!(
+            error
+                .to_string()
+                .contains("strong explicit miniseries metadata")
+        );
+    }
+
+    #[test]
     fn regression_between_the_sheets_prefers_reality() {
         let metadata = MetadataBundle {
             sonarr: json!({
@@ -1847,6 +1953,56 @@ mod tests {
                 .iter()
                 .any(|folder| folder.path == "/tv/documentary")
         );
+    }
+
+    #[test]
+    fn regression_the_witness_prefers_miniseries() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Witness (2026)",
+                "genres": ["Drama", "Mini-Series"],
+                "seriesType": "standard",
+                "network": "Netflix",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 3 }
+            }),
+            tmdb: Some(json!({
+                "name": "The Witness",
+                "type": "Miniseries",
+                "genres": [{ "name": "Drama" }, { "name": "Crime" }],
+                "keywords": { "results": [{ "name": "murder" }, { "name": "miniseries" }] },
+                "number_of_seasons": 1,
+                "number_of_episodes": 3,
+                "seasons": [{ "name": "Limited Series", "season_number": 1, "episode_count": 3 }],
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Andre Hanscombe" }] },
+                        { "roles": [{ "character": "Alex Hanscombe" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "The Witness (2026)",
+                        "type": { "name": "Mini-Series" },
+                        "genres": [{ "name": "Mini-Series" }, { "name": "Drama" }],
+                        "status": { "name": "Continuing" }
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(
+            eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/miniseries")
+        );
+        assert!(!eligible.iter().any(|folder| folder.path == "/tv/scripted"));
     }
 
     fn default_regression_root_folders() -> Vec<RootFolderChoice> {
