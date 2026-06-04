@@ -8,6 +8,7 @@ const MAX_KEYWORDS: usize = 24;
 const MAX_RATINGS: usize = 12;
 const MAX_SMALL_ARRAY: usize = 12;
 const MAX_CAST_ROLE_SAMPLES: usize = 8;
+const MAX_SEASON_NAME_SAMPLES: usize = 6;
 const MAX_OVERVIEW_CHARS: usize = 1200;
 const MAX_TAGLINE_CHARS: usize = 300;
 const MAX_NAME_CHARS: usize = 120;
@@ -72,12 +73,31 @@ impl ClassificationMetadata {
             .any(CompactSeriesMetadata::has_explicit_documentary_evidence)
     }
 
-    #[cfg(test)]
     pub fn has_explicit_miniseries_evidence(&self) -> bool {
         std::iter::once(&self.sonarr)
             .chain(self.tmdb.iter())
             .chain(self.tvdb.iter())
             .any(CompactSeriesMetadata::has_explicit_miniseries_evidence)
+    }
+
+    pub fn has_strong_explicit_miniseries_evidence(&self) -> bool {
+        let explicit_supporting_sources = std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .filter(|metadata| metadata.has_explicit_miniseries_evidence())
+            .count();
+        let has_provider_level_strong_evidence = std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .any(CompactSeriesMetadata::has_strong_explicit_miniseries_evidence);
+        let has_tvdb_miniseries_support = self
+            .tvdb
+            .as_ref()
+            .is_some_and(CompactSeriesMetadata::has_explicit_miniseries_evidence);
+
+        self.has_explicit_miniseries_evidence()
+            && (has_provider_level_strong_evidence
+                || (has_tvdb_miniseries_support && explicit_supporting_sources >= 2))
     }
 }
 
@@ -157,6 +177,8 @@ pub struct CompactSeriesMetadata {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub season_name_samples: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cast_role_samples: Vec<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub has_self_cast_evidence: bool,
@@ -218,8 +240,7 @@ impl CompactSeriesMetadata {
             || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
     }
 
-    #[cfg(test)]
-    fn has_explicit_miniseries_evidence(&self) -> bool {
+    pub fn has_explicit_miniseries_evidence(&self) -> bool {
         self.series_type
             .as_deref()
             .is_some_and(is_explicit_miniseries_label)
@@ -229,6 +250,22 @@ impl CompactSeriesMetadata {
                 .chain(self.keywords.iter())
                 .chain(self.tags.iter())
                 .any(|value| is_explicit_miniseries_label(value))
+    }
+
+    pub fn has_strong_explicit_miniseries_evidence(&self) -> bool {
+        self.has_explicit_miniseries_evidence()
+            && (self.has_short_miniseries_run_evidence()
+                || self.has_limited_series_season_name_evidence())
+    }
+
+    fn has_short_miniseries_run_evidence(&self) -> bool {
+        self.number_of_episodes.is_some_and(|count| count <= 6)
+    }
+
+    fn has_limited_series_season_name_evidence(&self) -> bool {
+        self.season_name_samples
+            .iter()
+            .any(|value| is_limited_series_season_name(value))
     }
 }
 
@@ -265,12 +302,15 @@ fn is_explicit_documentary_label(value: &str) -> bool {
     )
 }
 
-#[cfg(test)]
 fn is_explicit_miniseries_label(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "mini-series" | "miniseries" | "mini series" | "limited series"
     )
+}
+
+fn is_limited_series_season_name(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("limited series")
 }
 
 fn compact_sonarr(value: &Value) -> CompactSeriesMetadata {
@@ -335,6 +375,7 @@ fn compact_tmdb(value: &Value) -> CompactSeriesMetadata {
         tvdb_id: int_path(value, &["external_ids", "tvdb_id"]),
         tmdb_id: int_path(value, &["id"]),
         keywords: strings_from_array(value, &["keywords", "results"], &["name"], MAX_KEYWORDS),
+        season_name_samples: tmdb_season_name_samples(value),
         cast_role_samples: tmdb_cast_role_samples(value),
         has_self_cast_evidence: tmdb_has_self_cast_evidence(value),
         has_named_character_cast_evidence: tmdb_has_named_character_cast_evidence(value),
@@ -501,6 +542,10 @@ fn tmdb_cast_role_samples(value: &Value) -> Vec<String> {
     out
 }
 
+fn tmdb_season_name_samples(value: &Value) -> Vec<String> {
+    strings_from_array(value, &["seasons"], &["name"], MAX_SEASON_NAME_SAMPLES)
+}
+
 fn tmdb_has_self_cast_evidence(value: &Value) -> bool {
     let Some(cast) = path(value, &["aggregate_credits", "cast"]).and_then(Value::as_array) else {
         return false;
@@ -650,7 +695,7 @@ mod tests {
         assert!(!compact_json.contains("profile_path"));
         assert!(!compact_json.contains("poster_path"));
         assert!(!compact_json.contains("\"seasons\""));
-        assert!(!compact_json.contains("Season 1"));
+        assert!(compact_json.contains("\"season_name_samples\""));
         assert!(!compact_json.contains("remoteUrl"));
     }
 
@@ -1030,6 +1075,103 @@ mod tests {
 
         assert!(miniseries.has_explicit_miniseries_evidence());
         assert!(!miniseries.has_explicit_documentary_evidence());
+    }
+
+    #[test]
+    fn compact_metadata_detects_strong_miniseries_evidence_for_the_witness() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Witness (2026)",
+                "genres": ["Drama", "Mini-Series"],
+                "seriesType": "standard",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 3 }
+            }),
+            tmdb: Some(json!({
+                "name": "The Witness",
+                "type": "Miniseries",
+                "genres": [{ "name": "Drama" }, { "name": "Crime" }],
+                "keywords": { "results": [{ "name": "miniseries" }, { "name": "murder" }] },
+                "number_of_seasons": 1,
+                "number_of_episodes": 3,
+                "seasons": [{ "name": "Limited Series", "season_number": 1, "episode_count": 3 }]
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "The Witness (2026)",
+                        "type": { "name": "Mini-Series" },
+                        "genres": [{ "name": "Mini-Series" }, { "name": "Drama" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(metadata.has_explicit_miniseries_evidence());
+        assert!(metadata.has_strong_explicit_miniseries_evidence());
+        assert_eq!(
+            metadata.tmdb.as_ref().expect("tmdb").season_name_samples,
+            vec!["Limited Series"]
+        );
+    }
+
+    #[test]
+    fn compact_metadata_does_not_overstate_miniseries_for_cape_fear() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Cape Fear",
+                "genres": ["Crime", "Drama", "Mini-Series", "Thriller"],
+                "seriesType": "standard",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 10 }
+            }),
+            tmdb: Some(json!({
+                "name": "Cape Fear",
+                "type": "Miniseries",
+                "genres": [{ "name": "Crime" }, { "name": "Drama" }],
+                "number_of_seasons": 1,
+                "number_of_episodes": 10,
+                "seasons": [{ "name": "Miniseries", "season_number": 1, "episode_count": 10 }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(metadata.has_explicit_miniseries_evidence());
+        assert!(!metadata.has_strong_explicit_miniseries_evidence());
+    }
+
+    #[test]
+    fn compact_metadata_does_not_overstate_miniseries_for_life_larry() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Life, Larry and the Pursuit of Unhappiness",
+                "genres": ["Comedy"],
+                "seriesType": "standard",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 7 }
+            }),
+            tmdb: Some(json!({
+                "name": "Life, Larry and the Pursuit of Unhappiness",
+                "type": "Miniseries",
+                "keywords": { "results": [{ "name": "miniseries" }, { "name": "sketch comedy" }] },
+                "number_of_episodes": 7,
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Various Characters" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(metadata.has_explicit_miniseries_evidence());
+        assert!(!metadata.has_strong_explicit_miniseries_evidence());
     }
 
     fn large_metadata_bundle() -> MetadataBundle {
