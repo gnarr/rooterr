@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.2.1](https://github.com/gnarr/rooterr/compare/da9761dbbc04a4bc070b2365f82bc0ab8faa80a7..0.2.1) - 2026-06-04
+#### Bug Fixes
+- (**status**) move configured model into llm article - ([da9761d](https://github.com/gnarr/rooterr/commit/da9761dbbc04a4bc070b2365f82bc0ab8faa80a7)) - Gunnar Cortes
+
+- - -
+
 ## [0.2.0](https://github.com/gnarr/rooterr/compare/b0757a4ab6f11c412f010a66aeff808d80b77c58..0.2.0) - 2026-06-04
 #### Features
 - (**status**) add live dependency status page - ([b0757a4](https://github.com/gnarr/rooterr/commit/b0757a4ab6f11c412f010a66aeff808d80b77c58)) - Gunnar Cortes
