@@ -174,4 +174,28 @@ mod tests {
             .await
             .expect("move series");
     }
+
+    #[tokio::test]
+    async fn root_folders_reports_auth_failures() {
+        let server = MockServer::start().await;
+        let config = SonarrConfig {
+            base_url: server.uri(),
+            api_key: "bad-key".to_string(),
+            webhook_token: None,
+        };
+        let gateway = SonarrHttpGateway::new(Client::new(), &config);
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/rootfolder"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = gateway
+            .root_folders()
+            .await
+            .expect_err("auth failure should bubble up");
+        assert!(error.to_string().contains("Sonarr returned HTTP 401"));
+    }
 }

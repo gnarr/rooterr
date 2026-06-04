@@ -14,7 +14,8 @@ use crate::{
     config::Config,
     ports::{
         classifier::Classifier, decision_repository::DecisionRepository,
-        llm_model_provisioner::LlmModelProvisioner, metadata_provider::MetadataProvider,
+        llm_model_provisioner::LlmModelProvisioner, llm_status_probe::LlmStatusProbe,
+        metadata_provider::MetadataProvider, metadata_status_probe::MetadataStatusProbe,
         sonarr_gateway::SonarrGateway,
     },
     use_cases::{
@@ -24,6 +25,7 @@ use crate::{
         process_series_decision::{ClassificationPolicy, ProcessSeriesDecision},
         retry_decision::RetryDecision,
         view_decision::ViewDecision,
+        view_status::{StatusConfigSnapshot, ViewStatus},
     },
 };
 
@@ -36,6 +38,7 @@ pub struct AppServices {
     pub retry_decision: RetryDecision,
     pub list_decisions: ListDecisions,
     pub view_decision: ViewDecision,
+    pub view_status: ViewStatus,
 }
 
 impl AppServices {
@@ -54,19 +57,32 @@ impl AppServices {
         ));
         let sonarr: Arc<dyn SonarrGateway> =
             Arc::new(SonarrHttpGateway::new(http.clone(), &config.sonarr));
-        let metadata: Arc<dyn MetadataProvider> = Arc::new(ExternalMetadataProvider::new(
+        let metadata_adapter = Arc::new(ExternalMetadataProvider::new(
             http.clone(),
             &config.metadata,
         ));
+        let metadata: Arc<dyn MetadataProvider> = metadata_adapter.clone();
+        let metadata_status: Arc<dyn MetadataStatusProbe> = metadata_adapter;
         let llm = Arc::new(LocalLlmClassifier::new(http, &config.llm));
         if config.llm.auto_pull {
             let provisioner: Arc<dyn LlmModelProvisioner> = llm.clone();
             EnsureLlmModelReady::new(provisioner).execute().await?;
         }
-        let classifier: Arc<dyn Classifier> = llm;
+        let classifier: Arc<dyn Classifier> = llm.clone();
+        let llm_status: Arc<dyn LlmStatusProbe> = llm;
         let policy = ClassificationPolicy {
             min_confidence: config.classification.min_confidence,
             root_folders: config.classification.root_folders.clone(),
+        };
+        let status_config = StatusConfigSnapshot {
+            bind_address: config.server.bind_address.clone(),
+            webhook_auth_configured: config.sonarr.webhook_token.is_some(),
+            sqlite_path: config.database.sqlite_path.clone(),
+            sonarr_base_url: config.sonarr.base_url.clone(),
+            llm_provider: config.llm.provider.clone(),
+            tmdb_configured: config.metadata.tmdb_bearer_token.is_some(),
+            tvdb_configured: config.metadata.tvdb_api_key.is_some(),
+            configured_root_folders: config.classification.root_folders.clone(),
         };
 
         Ok(Self {
@@ -75,7 +91,7 @@ impl AppServices {
             accept_series_added: AcceptSeriesAdded::new(repository.clone()),
             process_series_decision: ProcessSeriesDecision::new(
                 repository.clone(),
-                sonarr,
+                sonarr.clone(),
                 metadata,
                 classifier,
                 policy,
@@ -83,6 +99,7 @@ impl AppServices {
             retry_decision: RetryDecision::new(repository.clone()),
             list_decisions: ListDecisions::new(repository.clone()),
             view_decision: ViewDecision::new(repository),
+            view_status: ViewStatus::new(sonarr, llm_status, metadata_status, status_config),
         })
     }
 }
