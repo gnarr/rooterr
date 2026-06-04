@@ -75,9 +75,7 @@ impl AppServices {
             root_folders: config.classification.root_folders.clone(),
         };
         let status_config = StatusConfigSnapshot {
-            bind_address: config.server.bind_address.clone(),
             webhook_auth_configured: config.sonarr.webhook_token.is_some(),
-            sqlite_path: config.database.sqlite_path.clone(),
             sonarr_base_url: config.sonarr.base_url.clone(),
             llm_provider: config.llm.provider.clone(),
             tmdb_configured: config.metadata.tmdb_bearer_token.is_some(),

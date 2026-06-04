@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use serde::Serialize;
 
 use crate::{config::LlmProvider, domain::decision::DecisionStatus};
@@ -76,8 +74,6 @@ pub struct RecentDecisionSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusOperationalSummary {
     pub version: String,
-    pub bind_address: String,
-    pub sqlite_path: PathBuf,
     pub webhook_auth_configured: bool,
     pub recent_decisions: RecentDecisionSummary,
 }

@@ -19,10 +19,7 @@ use crate::{
     bootstrap::AppServices,
     domain::{
         decision::{Decision, DecisionStatus, LlmRun},
-        status::{
-            RecentDecisionSummary, StatusPageView, StatusRootFolderView,
-            StatusSection,
-        },
+        status::{RecentDecisionSummary, StatusPageView, StatusRootFolderView, StatusSection},
     },
     use_cases::{
         accept_series_added::{AcceptSeriesAddedInput, AcceptSeriesAddedOutcome, IncomingSeries},
@@ -217,7 +214,7 @@ async fn series_detail(
     page(
         &series_title(&decision_view.decision),
         html! {
-            (top_nav(None))
+            (top_nav(Some("series_detail")))
             (series_content_region(&decision_view))
             script { (PreEscaped(DETAIL_SCRIPT)) }
         },
@@ -485,8 +482,6 @@ fn status_content(view: &StatusPageView) -> Markup {
         p class="muted" { "Checked at " (&view.checked_at) }
         section class="panel grid" {
             div { strong { "Version" } span { (&view.operational.version) } }
-            div { strong { "Bind address" } span { (&view.operational.bind_address) } }
-            div { strong { "Database" } span { (view.operational.sqlite_path.display()) } }
             div {
                 strong { "Webhook auth" }
                 span { (if view.operational.webhook_auth_configured { "configured" } else { "disabled" }) }
@@ -798,8 +793,6 @@ button {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
     use crate::domain::status::{StatusLevel, StatusOperationalSummary};
 
@@ -923,6 +916,14 @@ mod tests {
     }
 
     #[test]
+    fn top_nav_does_not_highlight_history_on_series_detail() {
+        let rendered = top_nav(Some("series_detail")).into_string();
+
+        assert!(!rendered.contains(r#"href="/" class="active""#));
+        assert!(!rendered.contains(r#"href="/status" class="active""#));
+    }
+
+    #[test]
     fn status_content_renders_sections_and_empty_states() {
         let view = StatusPageView {
             checked_at: "2026-06-04 12:00:00 UTC".to_string(),
@@ -962,8 +963,6 @@ mod tests {
             sonarr_root_folders: Vec::new(),
             operational: StatusOperationalSummary {
                 version: "0.1.4".to_string(),
-                bind_address: "0.0.0.0:9898".to_string(),
-                sqlite_path: PathBuf::from("./data/rooterr.sqlite3"),
                 webhook_auth_configured: true,
                 recent_decisions: RecentDecisionSummary {
                     sample_size: 0,
