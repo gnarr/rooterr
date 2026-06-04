@@ -17,7 +17,13 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use crate::{
     adapters::decision_events::DecisionEventPayload,
     bootstrap::AppServices,
-    domain::decision::{Decision, DecisionStatus, LlmRun},
+    domain::{
+        decision::{Decision, DecisionStatus, LlmRun},
+        status::{
+            RecentDecisionSummary, StatusOperationalSummary, StatusPageView, StatusRootFolderView,
+            StatusSection,
+        },
+    },
     use_cases::{
         accept_series_added::{AcceptSeriesAddedInput, AcceptSeriesAddedOutcome, IncomingSeries},
         retry_decision::RetryDecisionOutcome,
@@ -28,6 +34,7 @@ use crate::{
 pub fn router(services: Arc<AppServices>) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/status", get(status_page))
         .route("/events/decisions", get(decision_events))
         .route("/healthz", get(healthz))
         .route("/decision-history/{id}/row", get(decision_history_row))
@@ -140,6 +147,7 @@ async fn index(State(services): State<Arc<AppServices>>) -> impl IntoResponse {
         Ok(decisions) => page(
             "Rooterr",
             html! {
+                (top_nav(None))
                 (decision_history(&decisions))
                 script { (PreEscaped(HISTORY_SCRIPT)) }
             },
@@ -154,6 +162,26 @@ async fn index(State(services): State<Arc<AppServices>>) -> impl IntoResponse {
                 .into_response()
         }
     }
+}
+
+async fn status_page(State(services): State<Arc<AppServices>>) -> impl IntoResponse {
+    let recent_decisions = match services.list_decisions.list(25).await {
+        Ok(decisions) => decisions,
+        Err(error) => {
+            tracing::error!(error = %error, "failed to load recent decisions for status page");
+            Vec::new()
+        }
+    };
+
+    let view = services.view_status.view(&recent_decisions).await;
+    page(
+        "Rooterr Status",
+        html! {
+            (top_nav(Some("status")))
+            (status_content(&view))
+        },
+    )
+    .into_response()
 }
 
 async fn decision_history_row(
@@ -189,12 +217,21 @@ async fn series_detail(
     page(
         &series_title(&decision_view.decision),
         html! {
-            nav { a href="/" { "Decision History" } }
+            (top_nav(None))
             (series_content_region(&decision_view))
             script { (PreEscaped(DETAIL_SCRIPT)) }
         },
     )
     .into_response()
+}
+
+fn top_nav(active: Option<&str>) -> Markup {
+    html! {
+        nav class="top-nav" {
+            a href="/" class=[active.is_none().then_some("active")] { "Decision History" }
+            a href="/status" class=[(active == Some("status")).then_some("active")] { "Status" }
+        }
+    }
 }
 
 async fn series_detail_content(
@@ -442,6 +479,113 @@ fn decision_history(decisions: &[Decision]) -> Markup {
     }
 }
 
+fn status_content(view: &StatusPageView) -> Markup {
+    html! {
+        h1 { "System Status" }
+        p class="muted" { "Checked at " (&view.checked_at) }
+        section class="panel grid" {
+            div { strong { "Version" } span { (&view.operational.version) } }
+            div { strong { "Bind address" } span { (&view.operational.bind_address) } }
+            div { strong { "Database" } span { (view.operational.sqlite_path.display()) } }
+            div {
+                strong { "Webhook auth" }
+                span { (if view.operational.webhook_auth_configured { "configured" } else { "disabled" }) }
+            }
+        }
+        section class="panel" {
+            h2 { "Dependencies" }
+            (status_section("Sonarr", Some(&view.sonarr_base_url), &view.sonarr))
+            (status_section(
+                "LLM",
+                Some(&format!("{} / {}", view.llm_provider, view.llm_base_url)),
+                &view.llm,
+            ))
+            p class="muted" { "Configured model: " code { (&view.llm_model) } }
+            (status_section("TMDB", None, &view.tmdb))
+            (status_section("TVDB", None, &view.tvdb))
+        }
+        section class="panel" {
+            h2 { "Root Folders" }
+            h3 { "Configured classification root folders" }
+            (root_folder_list(&view.configured_root_folders, "No classification root folders are configured."))
+            h3 { "Sonarr root folders" }
+            (root_folder_list(&view.sonarr_root_folders, "Sonarr did not return any root folders."))
+        }
+        section class="panel" {
+            h2 { "Recent Decisions" }
+            (recent_decision_summary(&view.operational.recent_decisions))
+        }
+    }
+}
+
+fn status_section(title: &str, subtitle: Option<&str>, section: &StatusSection) -> Markup {
+    html! {
+        article class="status-block" {
+            div class="status-block-header" {
+                h3 { (title) }
+                span class=(section.level.badge_class()) { (section.level.as_str()) }
+            }
+            @if let Some(subtitle) = subtitle {
+                p class="muted" { (subtitle) }
+            }
+            p { (&section.summary) }
+            @if !section.details.is_empty() {
+                ul class="flat-list" {
+                    @for detail in &section.details {
+                        li { (detail) }
+                    }
+                }
+            }
+            @if let Some(error) = &section.error {
+                pre class="error-block" { (error) }
+            }
+        }
+    }
+}
+
+fn root_folder_list(folders: &[StatusRootFolderView], empty_message: &str) -> Markup {
+    if folders.is_empty() {
+        return html! { p class="muted" { (empty_message) } };
+    }
+
+    html! {
+        table {
+            thead {
+                tr {
+                    th { "Path" }
+                    th { "Label" }
+                    th { "Description" }
+                }
+            }
+            tbody {
+                @for folder in folders {
+                    tr {
+                        td { code { (&folder.path) } }
+                        td { (folder.label.as_deref().unwrap_or("-")) }
+                        td { (folder.description.as_deref().unwrap_or("-")) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn recent_decision_summary(summary: &RecentDecisionSummary) -> Markup {
+    html! {
+        @if summary.sample_size == 0 {
+            p class="muted" { "No decisions have been recorded yet." }
+        } @else {
+            div class="grid" {
+                div { strong { "Sample size" } span { (summary.sample_size) } }
+                div { strong { "Latest update" } span { (summary.latest_updated_at.as_deref().unwrap_or("-")) } }
+                div { strong { "Completed" } span { (summary.completed) } }
+                div { strong { "Failed" } span { (summary.failed) } }
+                div { strong { "Skipped low confidence" } span { (summary.skipped_low_confidence) } }
+            }
+        }
+    }
+}
+
 fn series_content_region(view: &DecisionView) -> Markup {
     html! {
         div id="series-detail-content" data-decision-id=(view.decision.id) {
@@ -557,6 +701,14 @@ h3 { margin: 0 0 8px; font-size: 15px; }
 h4 { margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+.top-nav {
+  display: flex;
+  gap: 12px;
+  margin: 0 0 18px;
+}
+.top-nav a.active {
+  font-weight: 600;
+}
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -627,11 +779,29 @@ button {
   padding-top: 12px;
   margin-top: 12px;
 }
+.status-block + .status-block {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.status-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.flat-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
 "#;
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::domain::status::StatusLevel;
 
     fn decision() -> Decision {
         Decision {
@@ -741,5 +911,79 @@ mod tests {
         assert!(rendered.contains("Metadata Snapshot"));
         assert!(DETAIL_SCRIPT.contains("new EventSource(\"/events/decisions\")"));
         assert!(DETAIL_SCRIPT.contains("/content"));
+    }
+
+    #[test]
+    fn top_nav_links_to_status_page() {
+        let rendered = top_nav(Some("status")).into_string();
+
+        assert!(rendered.contains(r#"href="/status""#));
+        assert!(rendered.contains("Decision History"));
+        assert!(rendered.contains("Status"));
+    }
+
+    #[test]
+    fn status_content_renders_sections_and_empty_states() {
+        let view = StatusPageView {
+            checked_at: "2026-06-04 12:00:00 UTC".to_string(),
+            sonarr_base_url: "http://sonarr:8989".to_string(),
+            sonarr: StatusSection {
+                level: StatusLevel::Ok,
+                summary: "Sonarr ok".to_string(),
+                details: vec!["1 root folder returned".to_string()],
+                error: None,
+            },
+            llm_provider: "ollama".to_string(),
+            llm_base_url: "http://ollama:11434".to_string(),
+            llm_model: "qwen3:0.6b".to_string(),
+            llm: StatusSection {
+                level: StatusLevel::Warn,
+                summary: "Model missing".to_string(),
+                details: vec!["provider: ollama".to_string()],
+                error: None,
+            },
+            tmdb: StatusSection {
+                level: StatusLevel::NotConfigured,
+                summary: "TMDB is not configured".to_string(),
+                details: Vec::new(),
+                error: None,
+            },
+            tvdb: StatusSection {
+                level: StatusLevel::Error,
+                summary: "TVDB probe failed".to_string(),
+                details: Vec::new(),
+                error: Some("auth failed".to_string()),
+            },
+            configured_root_folders: vec![StatusRootFolderView {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("General TV".to_string()),
+            }],
+            sonarr_root_folders: Vec::new(),
+            operational: StatusOperationalSummary {
+                version: "0.1.4".to_string(),
+                bind_address: "0.0.0.0:9898".to_string(),
+                sqlite_path: PathBuf::from("./data/rooterr.sqlite3"),
+                webhook_auth_configured: true,
+                recent_decisions: RecentDecisionSummary {
+                    sample_size: 0,
+                    latest_updated_at: None,
+                    completed: 0,
+                    failed: 0,
+                    skipped_low_confidence: 0,
+                },
+            },
+        };
+
+        let rendered = status_content(&view).into_string();
+
+        assert!(rendered.contains("System Status"));
+        assert!(rendered.contains("Sonarr ok"));
+        assert!(rendered.contains("Configured model"));
+        assert!(rendered.contains("TMDB is not configured"));
+        assert!(rendered.contains("TVDB probe failed"));
+        assert!(rendered.contains("No decisions have been recorded yet."));
+        assert!(rendered.contains("Configured classification root folders"));
+        assert!(rendered.contains("Sonarr did not return any root folders."));
     }
 }

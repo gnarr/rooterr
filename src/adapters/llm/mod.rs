@@ -15,8 +15,12 @@ use crate::{
         classification::{Classification, ClassificationAttempt, parse_classification_response},
         metadata::{ClassificationMetadata, MetadataBundle},
         root_folder::RootFolderChoice,
+        status::LlmStatusProbeResult,
     },
-    ports::{classifier::Classifier, llm_model_provisioner::LlmModelProvisioner},
+    ports::{
+        classifier::Classifier, llm_model_provisioner::LlmModelProvisioner,
+        llm_status_probe::LlmStatusProbe,
+    },
 };
 
 const DEFAULT_CONTEXT_LIMIT: u32 = 32_768;
@@ -183,6 +187,47 @@ impl LocalLlmClassifier {
             .collect())
     }
 
+    async fn fetch_openai_compatible_model_names(&self) -> Result<Vec<String>> {
+        let url = format!("{}/v1/models", self.config.base_url.trim_end_matches('/'));
+        let mut request = self
+            .http
+            .get(url)
+            .timeout(self.config.timeout().min(Duration::from_secs(5)));
+        if let Some(api_key) = self.config.api_key.as_deref() {
+            request = request.bearer_auth(api_key);
+        }
+
+        let response = request
+            .send()
+            .await
+            .context("failed to send OpenAI-compatible models request")?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .context("failed to read OpenAI-compatible models response")?;
+        if !status.is_success() {
+            bail!(
+                "OpenAI-compatible models returned HTTP {status}: {}",
+                text.trim()
+            );
+        }
+
+        let value: Value = serde_json::from_str(&text)
+            .context("failed to parse OpenAI-compatible models response")?;
+        let models = value
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|data| {
+                data.iter()
+                    .filter_map(|item| item.get("id").and_then(Value::as_str))
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok(models)
+    }
+
     async fn ollama_num_ctx(&self, messages: &[ChatMessage]) -> Result<Option<u32>> {
         if !self.config.auto_num_ctx {
             return Ok(None);
@@ -306,6 +351,61 @@ impl LlmModelProvisioner for LocalLlmClassifier {
         self.pull_ollama_model().await?;
         info!(model = %self.config.model, "Ollama model is ready");
         Ok(())
+    }
+}
+
+#[async_trait]
+impl LlmStatusProbe for LocalLlmClassifier {
+    fn provider(&self) -> LlmProvider {
+        self.config.provider.clone()
+    }
+
+    fn base_url(&self) -> &str {
+        &self.config.base_url
+    }
+
+    fn model(&self) -> &str {
+        &self.config.model
+    }
+
+    async fn probe_status(&self) -> Result<LlmStatusProbeResult> {
+        match self.config.provider {
+            LlmProvider::Ollama => {
+                let model_names = self.wait_for_ollama_model_names().await?;
+                let model_available = model_names.iter().any(|name| name == &self.config.model);
+                Ok(LlmStatusProbeResult {
+                    reachable: true,
+                    model_available: Some(model_available),
+                    detail: Some(if model_available {
+                        format!("model '{}' is available in Ollama", self.config.model)
+                    } else {
+                        format!("model '{}' is not available in Ollama", self.config.model)
+                    }),
+                })
+            }
+            LlmProvider::OpenAiCompatible => {
+                let model_names = self.fetch_openai_compatible_model_names().await?;
+                let model_available = model_names.iter().any(|name| name == &self.config.model);
+                let detail = if model_names.is_empty() {
+                    "OpenAI-compatible endpoint responded to /v1/models".to_string()
+                } else if model_available {
+                    format!(
+                        "configured model '{}' is listed by the endpoint",
+                        self.config.model
+                    )
+                } else {
+                    format!(
+                        "configured model '{}' is not listed by the endpoint",
+                        self.config.model
+                    )
+                };
+                Ok(LlmStatusProbeResult {
+                    reachable: true,
+                    model_available: Some(model_available),
+                    detail: Some(detail),
+                })
+            }
+        }
     }
 }
 
@@ -1021,6 +1121,55 @@ mod tests {
             .expect("chat request");
         let body: Value = chat_request.body_json().expect("chat body");
         assert_eq!(body["think"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn probe_status_reports_missing_ollama_model_as_warning_data() {
+        let server = MockServer::start().await;
+        let classifier = LocalLlmClassifier::new(Client::new(), &ollama_config(server.uri()));
+
+        Mock::given(method("GET"))
+            .and(path("/api/tags"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "models": [
+                    { "name": "different-model" }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = classifier.probe_status().await.expect("probe result");
+        assert!(result.reachable);
+        assert_eq!(result.model_available, Some(false));
+    }
+
+    #[tokio::test]
+    async fn probe_status_checks_openai_compatible_models() {
+        let server = MockServer::start().await;
+        let config = LlmConfig {
+            provider: LlmProvider::OpenAiCompatible,
+            base_url: server.uri(),
+            model: "gpt-test".to_string(),
+            timeout_seconds: 5,
+            ..LlmConfig::default()
+        };
+        let classifier = LocalLlmClassifier::new(Client::new(), &config);
+
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    { "id": "gpt-test" }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = classifier.probe_status().await.expect("probe result");
+        assert!(result.reachable);
+        assert_eq!(result.model_available, Some(true));
     }
 
     #[tokio::test]

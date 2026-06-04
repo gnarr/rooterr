@@ -5,8 +5,12 @@ use serde_json::{Value, json};
 
 use crate::{
     config::MetadataConfig,
-    domain::{metadata::MetadataBundle, series::SeriesDetails},
-    ports::metadata_provider::MetadataProvider,
+    domain::{
+        metadata::MetadataBundle,
+        series::SeriesDetails,
+        status::{MetadataServiceProbeResult, MetadataServiceType},
+    },
+    ports::{metadata_provider::MetadataProvider, metadata_status_probe::MetadataStatusProbe},
 };
 
 const TMDB_BASE_URL: &str = "https://api.themoviedb.org";
@@ -16,6 +20,8 @@ const TVDB_BASE_URL: &str = "https://api4.thetvdb.com/v4";
 pub struct ExternalMetadataProvider {
     http: Client,
     config: MetadataConfig,
+    tmdb_base_url: String,
+    tvdb_base_url: String,
 }
 
 impl ExternalMetadataProvider {
@@ -23,6 +29,8 @@ impl ExternalMetadataProvider {
         Self {
             http,
             config: config.clone(),
+            tmdb_base_url: TMDB_BASE_URL.to_string(),
+            tvdb_base_url: TVDB_BASE_URL.to_string(),
         }
     }
 
@@ -47,13 +55,17 @@ impl ExternalMetadataProvider {
         };
 
         let details_url = format!(
-            "{TMDB_BASE_URL}/3/tv/{tmdb_id}?append_to_response=external_ids,keywords,content_ratings,aggregate_credits"
+            "{}/3/tv/{tmdb_id}?append_to_response=external_ids,keywords,content_ratings,aggregate_credits",
+            self.tmdb_base_url
         );
         self.tmdb_get(token, &details_url).await.map(Some)
     }
 
     async fn find_tmdb_id_by_tvdb(&self, token: &str, tvdb_id: i64) -> Result<Option<i64>> {
-        let url = format!("{TMDB_BASE_URL}/3/find/{tvdb_id}?external_source=tvdb_id");
+        let url = format!(
+            "{}/3/find/{tvdb_id}?external_source=tvdb_id",
+            self.tmdb_base_url
+        );
         let value = self.tmdb_get(token, &url).await?;
         Ok(value
             .get("tv_results")
@@ -76,6 +88,20 @@ impl ExternalMetadataProvider {
         read_json_response("TMDB", response.status(), response.text().await, url).await
     }
 
+    async fn probe_tmdb(&self) -> Result<MetadataServiceProbeResult> {
+        let Some(token) = self.config.tmdb_bearer_token.as_deref() else {
+            bail!("TMDB bearer token is not configured");
+        };
+
+        let url = format!("{}/3/configuration", self.tmdb_base_url);
+        self.tmdb_get(token, &url).await?;
+        Ok(MetadataServiceProbeResult {
+            reachable: true,
+            authenticated: true,
+            detail: Some("TMDB configuration endpoint responded successfully".to_string()),
+        })
+    }
+
     async fn fetch_tvdb(&self, series: &SeriesDetails) -> Result<Value> {
         let Some(api_key) = self.config.tvdb_api_key.as_deref() else {
             bail!("TVDB API key is not configured");
@@ -89,14 +115,14 @@ impl ExternalMetadataProvider {
         let extended = self
             .tvdb_get(
                 &token,
-                &format!("{TVDB_BASE_URL}/series/{tvdb_id}/extended"),
+                &format!("{}/series/{tvdb_id}/extended", self.tvdb_base_url),
             )
             .await?;
 
         let translation = match self
             .tvdb_get(
                 &token,
-                &format!("{TVDB_BASE_URL}/series/{tvdb_id}/translations/eng"),
+                &format!("{}/series/{tvdb_id}/translations/eng", self.tvdb_base_url),
             )
             .await
         {
@@ -120,7 +146,7 @@ impl ExternalMetadataProvider {
 
         let response = self
             .http
-            .request(Method::POST, format!("{TVDB_BASE_URL}/login"))
+            .request(Method::POST, format!("{}/login", self.tvdb_base_url))
             .json(&body)
             .send()
             .await
@@ -134,6 +160,19 @@ impl ExternalMetadataProvider {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| anyhow!("TVDB login response did not include data.token"))
+    }
+
+    async fn probe_tvdb(&self) -> Result<MetadataServiceProbeResult> {
+        let Some(api_key) = self.config.tvdb_api_key.as_deref() else {
+            bail!("TVDB API key is not configured");
+        };
+
+        self.tvdb_login(api_key).await?;
+        Ok(MetadataServiceProbeResult {
+            reachable: true,
+            authenticated: true,
+            detail: Some("TVDB login succeeded".to_string()),
+        })
     }
 
     async fn tvdb_get(&self, token: &str, url: &str) -> Result<Value> {
@@ -173,6 +212,19 @@ impl MetadataProvider for ExternalMetadataProvider {
     }
 }
 
+#[async_trait]
+impl MetadataStatusProbe for ExternalMetadataProvider {
+    async fn probe_service(
+        &self,
+        service: MetadataServiceType,
+    ) -> Result<MetadataServiceProbeResult> {
+        match service {
+            MetadataServiceType::Tmdb => self.probe_tmdb().await,
+            MetadataServiceType::Tvdb => self.probe_tvdb().await,
+        }
+    }
+}
+
 async fn read_json_response(
     provider: &str,
     status: StatusCode,
@@ -191,4 +243,75 @@ async fn read_json_response(
 
     serde_json::from_str(&body)
         .with_context(|| format!("failed to parse {provider} JSON from {url}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+
+    use super::*;
+
+    fn provider_with_urls(server: &MockServer, config: MetadataConfig) -> ExternalMetadataProvider {
+        ExternalMetadataProvider {
+            http: Client::new(),
+            config,
+            tmdb_base_url: server.uri(),
+            tvdb_base_url: format!("{}/v4", server.uri()),
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_tmdb_succeeds_when_configured() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/3/configuration"))
+            .and(header("authorization", "Bearer token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "images": {} })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = provider_with_urls(
+            &server,
+            MetadataConfig {
+                tmdb_bearer_token: Some("token".to_string()),
+                tvdb_api_key: None,
+                tvdb_pin: None,
+            },
+        );
+
+        let result = provider.probe_tmdb().await.expect("tmdb probe");
+        assert!(result.reachable);
+        assert!(result.authenticated);
+    }
+
+    #[tokio::test]
+    async fn probe_tvdb_fails_when_login_is_rejected() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v4/login"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("bad credentials"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = provider_with_urls(
+            &server,
+            MetadataConfig {
+                tmdb_bearer_token: None,
+                tvdb_api_key: Some("bad-key".to_string()),
+                tvdb_pin: None,
+            },
+        );
+
+        let error = provider
+            .probe_tvdb()
+            .await
+            .expect_err("tvdb login should fail");
+        assert!(error.to_string().contains("TVDB returned HTTP 401"));
+    }
 }
