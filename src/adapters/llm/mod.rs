@@ -371,7 +371,7 @@ impl LlmStatusProbe for LocalLlmClassifier {
     async fn probe_status(&self) -> Result<LlmStatusProbeResult> {
         match self.config.provider {
             LlmProvider::Ollama => {
-                let model_names = self.wait_for_ollama_model_names().await?;
+                let model_names = self.fetch_ollama_model_names().await?;
                 let model_available = model_names.iter().any(|name| name == &self.config.model);
                 Ok(LlmStatusProbeResult {
                     reachable: true,
