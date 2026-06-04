@@ -72,6 +72,7 @@ impl ClassificationMetadata {
             .any(CompactSeriesMetadata::has_explicit_documentary_evidence)
     }
 
+    #[cfg(test)]
     pub fn has_explicit_miniseries_evidence(&self) -> bool {
         std::iter::once(&self.sonarr)
             .chain(self.tmdb.iter())
@@ -217,6 +218,7 @@ impl CompactSeriesMetadata {
             || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
     }
 
+    #[cfg(test)]
     fn has_explicit_miniseries_evidence(&self) -> bool {
         self.series_type
             .as_deref()
@@ -263,6 +265,7 @@ fn is_explicit_documentary_label(value: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 fn is_explicit_miniseries_label(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),

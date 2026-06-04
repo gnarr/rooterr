@@ -20,7 +20,7 @@ use crate::{
     domain::{
         decision::{Decision, DecisionStatus, LlmRun},
         status::{
-            RecentDecisionSummary, StatusOperationalSummary, StatusPageView, StatusRootFolderView,
+            RecentDecisionSummary, StatusPageView, StatusRootFolderView,
             StatusSection,
         },
     },
@@ -801,7 +801,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::domain::status::StatusLevel;
+    use crate::domain::status::{StatusLevel, StatusOperationalSummary};
 
     fn decision() -> Decision {
         Decision {

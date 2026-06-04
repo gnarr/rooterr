@@ -298,7 +298,6 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeLlm {
-        provider: LlmProvider,
         base_url: String,
         model: String,
         probe: Result<LlmStatusProbeResult, String>,
@@ -306,9 +305,6 @@ mod tests {
 
     #[async_trait]
     impl LlmStatusProbe for FakeLlm {
-        fn provider(&self) -> LlmProvider {
-            self.provider.clone()
-        }
         fn base_url(&self) -> &str {
             &self.base_url
         }
@@ -386,19 +382,15 @@ mod tests {
                 }]),
             }),
             Arc::new(FakeLlm {
-                provider: LlmProvider::Ollama,
                 base_url: "http://ollama:11434".to_string(),
                 model: "qwen3:0.6b".to_string(),
                 probe: Ok(LlmStatusProbeResult {
-                    reachable: true,
                     model_available: Some(false),
                     detail: Some("configured model missing".to_string()),
                 }),
             }),
             Arc::new(FakeMetadata {
                 tmdb: Ok(MetadataServiceProbeResult {
-                    reachable: true,
-                    authenticated: true,
                     detail: Some("TMDB ok".to_string()),
                 }),
                 tvdb: Err("TVDB auth failed".to_string()),

@@ -96,8 +96,6 @@ impl ExternalMetadataProvider {
         let url = format!("{}/3/configuration", self.tmdb_base_url);
         self.tmdb_get(token, &url).await?;
         Ok(MetadataServiceProbeResult {
-            reachable: true,
-            authenticated: true,
             detail: Some("TMDB configuration endpoint responded successfully".to_string()),
         })
     }
@@ -169,8 +167,6 @@ impl ExternalMetadataProvider {
 
         self.tvdb_login(api_key).await?;
         Ok(MetadataServiceProbeResult {
-            reachable: true,
-            authenticated: true,
             detail: Some("TVDB login succeeded".to_string()),
         })
     }
@@ -285,8 +281,10 @@ mod tests {
         );
 
         let result = provider.probe_tmdb().await.expect("tmdb probe");
-        assert!(result.reachable);
-        assert!(result.authenticated);
+        assert_eq!(
+            result.detail.as_deref(),
+            Some("TMDB configuration endpoint responded successfully")
+        );
     }
 
     #[tokio::test]
