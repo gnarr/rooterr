@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.2.0](https://github.com/gnarr/rooterr/compare/b0757a4ab6f11c412f010a66aeff808d80b77c58..0.2.0) - 2026-06-04
+#### Features
+- (**status**) add live dependency status page - ([b0757a4](https://github.com/gnarr/rooterr/commit/b0757a4ab6f11c412f010a66aeff808d80b77c58)) - Gunnar Cortes
+#### Bug Fixes
+- (**web**) correct status disclosure and detail nav state - ([8b607a9](https://github.com/gnarr/rooterr/commit/8b607a9ea5a937674254a64760a2185f6331028e)) - Gunnar Cortes
+- single bounded Ollama probe instead of inheriting startup wait loop - ([67e0cc6](https://github.com/gnarr/rooterr/commit/67e0cc6376ff4b8d3e47d9119dce3fbff72b78e6)) - Gunnar Cortes
+#### Refactoring
+- (**status**) trim dead code and clippy warnings - ([b6a9a15](https://github.com/gnarr/rooterr/commit/b6a9a15b8c217901778e64f3240a353e49f90030)) - Gunnar Cortes
+
+- - -
+
 ## [0.1.5](https://github.com/gnarr/rooterr/compare/ee1a5c4a0c8473e55f3e2ea37361710da32be145..0.1.5) - 2026-06-04
 #### Bug Fixes
 - (**classification**) harden reality and docuseries routing - ([ee29c5d](https://github.com/gnarr/rooterr/commit/ee29c5dc2ea77370465a20a87663dc3658430b1c)) - Gunnar Cortes
