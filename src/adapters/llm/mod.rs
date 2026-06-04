@@ -323,10 +323,10 @@ impl LocalLlmClassifier {
             );
         }
 
-        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-            if let Some(error) = value.get("error").and_then(Value::as_str) {
-                bail!("Ollama pull for {} failed: {error}", self.config.model);
-            }
+        if let Ok(value) = serde_json::from_str::<Value>(&text)
+            && let Some(error) = value.get("error").and_then(Value::as_str)
+        {
+            bail!("Ollama pull for {} failed: {error}", self.config.model);
         }
 
         Ok(())
@@ -356,10 +356,6 @@ impl LlmModelProvisioner for LocalLlmClassifier {
 
 #[async_trait]
 impl LlmStatusProbe for LocalLlmClassifier {
-    fn provider(&self) -> LlmProvider {
-        self.config.provider.clone()
-    }
-
     fn base_url(&self) -> &str {
         &self.config.base_url
     }
@@ -374,7 +370,6 @@ impl LlmStatusProbe for LocalLlmClassifier {
                 let model_names = self.fetch_ollama_model_names().await?;
                 let model_available = model_names.iter().any(|name| name == &self.config.model);
                 Ok(LlmStatusProbeResult {
-                    reachable: true,
                     model_available: Some(model_available),
                     detail: Some(if model_available {
                         format!("model '{}' is available in Ollama", self.config.model)
@@ -400,7 +395,6 @@ impl LlmStatusProbe for LocalLlmClassifier {
                     )
                 };
                 Ok(LlmStatusProbeResult {
-                    reachable: true,
                     model_available: Some(model_available),
                     detail: Some(detail),
                 })
@@ -513,6 +507,7 @@ struct OllamaPullRequest<'a> {
     stream: bool,
 }
 
+#[cfg(test)]
 fn build_classification_messages(
     metadata: &MetadataBundle,
     root_folders: &[RootFolderChoice],
@@ -1140,7 +1135,6 @@ mod tests {
             .await;
 
         let result = classifier.probe_status().await.expect("probe result");
-        assert!(result.reachable);
         assert_eq!(result.model_available, Some(false));
     }
 
@@ -1168,7 +1162,6 @@ mod tests {
             .await;
 
         let result = classifier.probe_status().await.expect("probe result");
-        assert!(result.reachable);
         assert_eq!(result.model_available, Some(true));
     }
 

@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::{
-    config::LlmProvider,
-    domain::{decision::DecisionStatus, root_folder::RootFolderChoice},
-};
+use crate::{config::LlmProvider, domain::decision::DecisionStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum StatusLevel {
@@ -43,15 +40,12 @@ pub enum MetadataServiceType {
 
 #[derive(Debug, Clone)]
 pub struct LlmStatusProbeResult {
-    pub reachable: bool,
     pub model_available: Option<bool>,
     pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MetadataServiceProbeResult {
-    pub reachable: bool,
-    pub authenticated: bool,
     pub detail: Option<String>,
 }
 
@@ -136,16 +130,4 @@ pub fn summarize_recent_decisions(
         failed,
         skipped_low_confidence,
     }
-}
-
-pub fn configured_root_folder_views(
-    folders: impl Iterator<Item = (String, RootFolderChoice)>,
-) -> Vec<StatusRootFolderView> {
-    folders
-        .map(|(path, folder)| StatusRootFolderView {
-            path,
-            label: folder.label,
-            description: folder.description,
-        })
-        .collect()
 }
