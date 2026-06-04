@@ -442,10 +442,11 @@ fn build_messages(
                 "Prefer a specific matching folder over a broad scripted/default folder when explicit metadata supports the specific folder. ",
                 "Provider series_type values such as standard or scripted are weak format signals; do not choose scripted only because of them. ",
                 "When a kids folder exists, explicit children or kids genres, keywords, tags, ratings, or overview signals should choose kids over scripted. ",
+                "Explicit reality or unscripted metadata should choose reality over scripted when a reality folder exists. ",
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted. ",
-                "Only choose documentary for explicit documentary or docuseries metadata; history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
-                "When a miniseries folder exists, explicit miniseries or limited-series metadata should choose miniseries over general scripted. ",
+                "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
+                "Treat miniseries as a structural hint, not a content-type override: documentary beats miniseries, reality beats scripted, and clear scripted evidence can still belong in scripted even when miniseries metadata is present. ",
                 "Animation alone is not a kids signal. ",
                 "Prefer obvious categories like anime, documentary, kids, miniseries, reality, scripted, sports, or talkshows when the metadata supports them."
             )
@@ -466,9 +467,9 @@ fn eligible_root_folders(
 ) -> Vec<RootFolderChoice> {
     let explicit_talk_show = metadata.has_explicit_talk_show_evidence();
     let has_talk_show_root = root_folders.iter().any(is_talk_show_root_folder);
-    let explicit_miniseries = metadata.has_explicit_miniseries_evidence();
-    let has_miniseries_root = root_folders.iter().any(is_miniseries_root_folder);
     let explicit_documentary = metadata.has_explicit_documentary_evidence();
+    let explicit_reality = metadata.has_explicit_reality_evidence();
+    let has_reality_root = root_folders.iter().any(is_reality_root_folder);
 
     root_folders
         .iter()
@@ -476,10 +477,10 @@ fn eligible_root_folders(
             (!is_kids_root_folder(folder) || metadata.has_explicit_kids_evidence())
                 && (!is_documentary_root_folder(folder) || explicit_documentary)
                 && (!explicit_talk_show || !has_talk_show_root || is_talk_show_root_folder(folder))
-                && (!explicit_miniseries
-                    || explicit_documentary
-                    || !has_miniseries_root
-                    || is_miniseries_root_folder(folder))
+                && (!explicit_reality
+                    || !has_reality_root
+                    || !is_scripted_or_miniseries_root_folder(folder)
+                    || is_reality_root_folder(folder))
         })
         .cloned()
         .collect()
@@ -500,6 +501,28 @@ fn validate_grounded_classification(
     if is_kids_root_folder(folder) && !metadata.has_explicit_kids_evidence() {
         bail!(
             "LLM selected kids root folder '{}' without explicit kids metadata evidence",
+            folder.path
+        );
+    }
+
+    let has_documentary_root = root_folders.iter().any(is_documentary_root_folder);
+    if is_miniseries_root_folder(folder)
+        && metadata.has_explicit_documentary_evidence()
+        && has_documentary_root
+    {
+        bail!(
+            "LLM selected miniseries root '{}' despite explicit documentary metadata evidence",
+            folder.path
+        );
+    }
+
+    let has_reality_root = root_folders.iter().any(is_reality_root_folder);
+    if is_scripted_root_folder(folder)
+        && metadata.has_explicit_reality_evidence()
+        && has_reality_root
+    {
+        bail!(
+            "LLM selected scripted root '{}' despite explicit reality metadata evidence",
             folder.path
         );
     }
@@ -543,6 +566,18 @@ fn is_documentary_root_folder(folder: &RootFolderChoice) -> bool {
         || contains_documentary_folder_term(&folder.path)
 }
 
+fn is_reality_root_folder(folder: &RootFolderChoice) -> bool {
+    folder
+        .label
+        .as_deref()
+        .is_some_and(contains_reality_folder_term)
+        || folder
+            .description
+            .as_deref()
+            .is_some_and(contains_reality_folder_term)
+        || contains_reality_folder_term(&folder.path)
+}
+
 fn is_miniseries_root_folder(folder: &RootFolderChoice) -> bool {
     folder
         .label
@@ -553,6 +588,22 @@ fn is_miniseries_root_folder(folder: &RootFolderChoice) -> bool {
             .as_deref()
             .is_some_and(contains_miniseries_folder_term)
         || contains_miniseries_folder_term(&folder.path)
+}
+
+fn is_scripted_root_folder(folder: &RootFolderChoice) -> bool {
+    folder
+        .label
+        .as_deref()
+        .is_some_and(contains_scripted_folder_term)
+        || folder
+            .description
+            .as_deref()
+            .is_some_and(contains_scripted_folder_term)
+        || contains_scripted_folder_term(&folder.path)
+}
+
+fn is_scripted_or_miniseries_root_folder(folder: &RootFolderChoice) -> bool {
+    is_scripted_root_folder(folder) || is_miniseries_root_folder(folder)
 }
 
 fn contains_kids_folder_term(value: &str) -> bool {
@@ -586,6 +637,12 @@ fn contains_documentary_folder_term(value: &str) -> bool {
         })
 }
 
+fn contains_reality_folder_term(value: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|part| matches!(part.to_ascii_lowercase().as_str(), "reality" | "unscripted"))
+}
+
 fn contains_miniseries_folder_term(value: &str) -> bool {
     value
         .chars()
@@ -593,6 +650,12 @@ fn contains_miniseries_folder_term(value: &str) -> bool {
         .flat_map(char::to_lowercase)
         .collect::<String>()
         .contains("miniseries")
+}
+
+fn contains_scripted_folder_term(value: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|part| part.eq_ignore_ascii_case("scripted"))
 }
 
 fn format_anyhow_error(error: &anyhow::Error) -> String {
@@ -1103,6 +1166,8 @@ mod tests {
         assert!(system_prompt.contains("series_type values such as standard or scripted"));
         assert!(system_prompt.contains("should choose kids over scripted"));
         assert!(system_prompt.contains("Never invent kids evidence"));
+        assert!(system_prompt.contains("choose reality over scripted"));
+        assert!(system_prompt.contains("Treat miniseries as a structural hint"));
     }
 
     #[test]
@@ -1193,6 +1258,47 @@ mod tests {
         assert_eq!(eligible, vec![root_folders[1].clone()]);
         assert!(!prompt.contains("/tv/kids"));
         assert!(prompt.contains("/tv/reality"));
+    }
+
+    #[test]
+    fn explicit_reality_metadata_only_offers_reality_over_scripted_and_miniseries() {
+        let reality_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "90 Day: The Last Resort Between The Sheets",
+                "genres": ["Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "90 Day: The Last Resort Between The Sheets",
+                "type": "Scripted",
+                "genres": [{ "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/miniseries".to_string(),
+                label: Some("Miniseries".to_string()),
+                description: Some("Limited series and miniseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("General scripted television.".to_string()),
+            },
+        ];
+
+        let eligible = eligible_root_folders(&reality_metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[0].clone()]);
     }
 
     #[test]
@@ -1319,10 +1425,13 @@ mod tests {
             .content
             .as_str();
 
-        assert_eq!(eligible, vec![root_folders[1].clone()]);
+        assert_eq!(
+            eligible,
+            vec![root_folders[1].clone(), root_folders[2].clone()]
+        );
         assert!(!prompt.contains("/tv/documentary"));
         assert!(prompt.contains("/tv/miniseries"));
-        assert!(!prompt.contains("/tv/scripted"));
+        assert!(prompt.contains("/tv/scripted"));
     }
 
     #[test]
@@ -1348,6 +1457,293 @@ mod tests {
             eligible_root_folders(&documentary, &root_folders),
             root_folders
         );
+    }
+
+    #[test]
+    fn scripted_classification_is_rejected_when_reality_is_explicit() {
+        let reality_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "90 Day: The Last Resort Between The Sheets",
+                "genres": ["Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "90 Day: The Last Resort Between The Sheets",
+                "type": "Scripted",
+                "genres": [{ "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("General scripted television.".to_string()),
+            },
+        ];
+        let classification = Classification {
+            root_folder_path: "/tv/scripted".to_string(),
+            confidence: 0.95,
+            reason: "Type is scripted.".to_string(),
+            signals: vec!["type: Scripted".to_string()],
+        };
+
+        let error =
+            validate_grounded_classification(&classification, &reality_metadata, &root_folders)
+                .expect_err("ungrounded scripted classification");
+
+        assert!(error.to_string().contains("explicit reality metadata"));
+    }
+
+    #[test]
+    fn miniseries_classification_is_rejected_when_documentary_is_explicit() {
+        let documentary_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Yogurt Shop Murders",
+                "genres": ["Crime", "Documentary", "Mini-Series"]
+            }),
+            tmdb: Some(json!({
+                "name": "The Yogurt Shop Murders",
+                "type": "Miniseries",
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Self - Lead Investigator" }] },
+                        { "roles": [{ "character": "Self - Austin Filmmaker" }] },
+                        { "roles": [{ "character": "Self - Amy's Mother" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/miniseries".to_string(),
+                label: Some("Miniseries".to_string()),
+                description: Some("Limited series and miniseries.".to_string()),
+            },
+        ];
+        let classification = Classification {
+            root_folder_path: "/tv/miniseries".to_string(),
+            confidence: 0.99,
+            reason: "TMDB type says miniseries.".to_string(),
+            signals: vec!["type: Miniseries".to_string()],
+        };
+
+        let error =
+            validate_grounded_classification(&classification, &documentary_metadata, &root_folders)
+                .expect_err("ungrounded miniseries classification");
+
+        assert!(error.to_string().contains("explicit documentary metadata"));
+    }
+
+    #[test]
+    fn regression_between_the_sheets_prefers_reality() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "90 Day: The Last Resort Between The Sheets",
+                "genres": ["Reality"],
+                "seriesType": "standard",
+                "network": "TLC",
+                "overview": "An after-show for 90 Day: The Last Resort."
+            }),
+            tmdb: Some(json!({
+                "name": "90 Day: The Last Resort Between The Sheets",
+                "type": "Scripted",
+                "genres": [{ "name": "Reality" }],
+                "overview": "Cast members provide behind-the-scenes commentary."
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[3].clone()]);
+    }
+
+    #[test]
+    fn regression_cape_fear_keeps_scripted_available() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Cape Fear",
+                "genres": ["Crime", "Drama", "Mini-Series", "Suspense", "Thriller"],
+                "seriesType": "standard",
+                "network": "Apple TV",
+                "statistics": { "totalEpisodeCount": 10 }
+            }),
+            tmdb: Some(json!({
+                "name": "Cape Fear",
+                "type": "Miniseries",
+                "genres": [{ "name": "Crime" }, { "name": "Drama" }],
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Max Cady" }] },
+                        { "roles": [{ "character": "Amanda Bowden" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(eligible.iter().any(|folder| folder.path == "/tv/scripted"));
+        assert!(
+            eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/miniseries")
+        );
+        assert!(
+            !eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/documentary")
+        );
+    }
+
+    #[test]
+    fn regression_yogurt_shop_prefers_documentary() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Yogurt Shop Murders",
+                "genres": ["Crime", "Documentary", "Mini-Series"],
+                "seriesType": "standard",
+                "network": "HBO"
+            }),
+            tmdb: Some(json!({
+                "name": "The Yogurt Shop Murders",
+                "type": "Miniseries",
+                "genres": [{ "name": "Documentary" }, { "name": "Crime" }],
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Self - Lead Investigator" }] },
+                        { "roles": [{ "character": "Self - Austin Filmmaker" }] },
+                        { "roles": [{ "character": "Self - Amy's Mother" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(
+            eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/documentary")
+        );
+        let classification = Classification {
+            root_folder_path: "/tv/miniseries".to_string(),
+            confidence: 0.99,
+            reason: "Miniseries label.".to_string(),
+            signals: vec!["type: Miniseries".to_string()],
+        };
+        assert!(
+            validate_grounded_classification(&classification, &metadata, &root_folders).is_err()
+        );
+    }
+
+    #[test]
+    fn regression_life_larry_keeps_scripted_available() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Life, Larry and the Pursuit of Unhappiness",
+                "genres": ["Comedy"],
+                "seriesType": "standard",
+                "network": "HBO",
+                "statistics": { "totalEpisodeCount": 7 }
+            }),
+            tmdb: Some(json!({
+                "name": "Life, Larry and the Pursuit of Unhappiness",
+                "type": "Miniseries",
+                "keywords": { "results": [{ "name": "miniseries" }, { "name": "sketch comedy" }] },
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Various Characters" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(eligible.iter().any(|folder| folder.path == "/tv/scripted"));
+        assert!(
+            eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/miniseries")
+        );
+        assert!(
+            !eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/documentary")
+        );
+    }
+
+    fn default_regression_root_folders() -> Vec<RootFolderChoice> {
+        vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some(
+                    "Documentaries, factual, nature, history, science, and docuseries.".to_string(),
+                ),
+            },
+            RootFolderChoice {
+                path: "/tv/kids".to_string(),
+                label: Some("Kids".to_string()),
+                description: Some("Children and family-oriented shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/miniseries".to_string(),
+                label: Some("Miniseries".to_string()),
+                description: Some(
+                    "Limited series, short-run event series, and single-season miniseries."
+                        .to_string(),
+                ),
+            },
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some(
+                    "Reality, competition, lifestyle, and unscripted entertainment.".to_string(),
+                ),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some(
+                    "Default scripted drama, comedy, action, sci-fi, and general TV.".to_string(),
+                ),
+            },
+        ]
     }
 
     #[test]
