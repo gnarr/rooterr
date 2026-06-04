@@ -7,6 +7,7 @@ const MAX_GENRES: usize = 20;
 const MAX_KEYWORDS: usize = 24;
 const MAX_RATINGS: usize = 12;
 const MAX_SMALL_ARRAY: usize = 12;
+const MAX_CAST_ROLE_SAMPLES: usize = 8;
 const MAX_OVERVIEW_CHARS: usize = 1200;
 const MAX_TAGLINE_CHARS: usize = 300;
 const MAX_NAME_CHARS: usize = 120;
@@ -55,6 +56,13 @@ impl ClassificationMetadata {
             .chain(self.tmdb.iter())
             .chain(self.tvdb.iter())
             .any(CompactSeriesMetadata::has_explicit_talk_show_evidence)
+    }
+
+    pub fn has_explicit_reality_evidence(&self) -> bool {
+        std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .any(CompactSeriesMetadata::has_explicit_reality_evidence)
     }
 
     pub fn has_explicit_documentary_evidence(&self) -> bool {
@@ -147,6 +155,12 @@ pub struct CompactSeriesMetadata {
     pub aliases: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cast_role_samples: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_self_cast_evidence: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_named_character_cast_evidence: bool,
 }
 
 impl CompactSeriesMetadata {
@@ -178,6 +192,18 @@ impl CompactSeriesMetadata {
                 .any(|value| is_explicit_talk_show_label(value))
     }
 
+    fn has_explicit_reality_evidence(&self) -> bool {
+        self.series_type
+            .as_deref()
+            .is_some_and(is_explicit_reality_label)
+            || self
+                .genres
+                .iter()
+                .chain(self.keywords.iter())
+                .chain(self.tags.iter())
+                .any(|value| is_explicit_reality_label(value))
+    }
+
     fn has_explicit_documentary_evidence(&self) -> bool {
         self.series_type
             .as_deref()
@@ -188,6 +214,7 @@ impl CompactSeriesMetadata {
                 .chain(self.keywords.iter())
                 .chain(self.tags.iter())
                 .any(|value| is_explicit_documentary_label(value))
+            || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
     }
 
     fn has_explicit_miniseries_evidence(&self) -> bool {
@@ -214,6 +241,18 @@ fn is_explicit_talk_show_label(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "talk" | "talk show" | "talk shows" | "talkshow" | "talkshows"
+    )
+}
+
+fn is_explicit_reality_label(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "reality"
+            | "reality tv"
+            | "unscripted"
+            | "competition reality"
+            | "dating reality"
+            | "lifestyle reality"
     )
 }
 
@@ -293,6 +332,9 @@ fn compact_tmdb(value: &Value) -> CompactSeriesMetadata {
         tvdb_id: int_path(value, &["external_ids", "tvdb_id"]),
         tmdb_id: int_path(value, &["id"]),
         keywords: strings_from_array(value, &["keywords", "results"], &["name"], MAX_KEYWORDS),
+        cast_role_samples: tmdb_cast_role_samples(value),
+        has_self_cast_evidence: tmdb_has_self_cast_evidence(value),
+        has_named_character_cast_evidence: tmdb_has_named_character_cast_evidence(value),
         ..CompactSeriesMetadata::default()
     }
 }
@@ -425,6 +467,89 @@ fn push_unique(out: &mut Vec<String>, value: String, max: usize) {
     }
 
     out.push(value);
+}
+
+fn tmdb_cast_role_samples(value: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(cast) = path(value, &["aggregate_credits", "cast"]).and_then(Value::as_array) else {
+        return out;
+    };
+
+    for person in cast {
+        let Some(roles) = person.get("roles").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for role in roles {
+            let Some(character) = string_path(role, &["character"]) else {
+                continue;
+            };
+            push_unique(
+                &mut out,
+                normalize_cast_role(&character),
+                MAX_CAST_ROLE_SAMPLES,
+            );
+            if out.len() >= MAX_CAST_ROLE_SAMPLES {
+                return out;
+            }
+        }
+    }
+
+    out
+}
+
+fn tmdb_has_self_cast_evidence(value: &Value) -> bool {
+    let Some(cast) = path(value, &["aggregate_credits", "cast"]).and_then(Value::as_array) else {
+        return false;
+    };
+
+    let mut self_roles = 0usize;
+    let mut named_roles = 0usize;
+    let mut observed = 0usize;
+
+    for person in cast.iter().take(MAX_CAST_ROLE_SAMPLES) {
+        let Some(roles) = person.get("roles").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for role in roles {
+            let Some(character) = string_path(role, &["character"]) else {
+                continue;
+            };
+            observed += 1;
+            if is_self_cast_role(&character) {
+                self_roles += 1;
+            } else if !character.trim().is_empty() {
+                named_roles += 1;
+            }
+        }
+    }
+
+    observed >= 3 && self_roles * 4 >= observed * 3 && named_roles == 0
+}
+
+fn tmdb_has_named_character_cast_evidence(value: &Value) -> bool {
+    let Some(cast) = path(value, &["aggregate_credits", "cast"]).and_then(Value::as_array) else {
+        return false;
+    };
+
+    cast.iter().any(|person| {
+        person
+            .get("roles")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|role| string_path(role, &["character"]))
+            .any(|character| !character.trim().is_empty() && !is_self_cast_role(&character))
+    })
+}
+
+fn normalize_cast_role(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_self_cast_role(value: &str) -> bool {
+    value.trim().to_ascii_lowercase().starts_with("self")
 }
 
 fn path<'a>(value: &'a Value, path_parts: &[&str]) -> Option<&'a Value> {
@@ -662,6 +787,51 @@ mod tests {
     }
 
     #[test]
+    fn compact_metadata_detects_explicit_reality_evidence() {
+        let reality_series = MetadataBundle {
+            sonarr: json!({
+                "title": "90 Day Fiancé",
+                "genres": ["Reality", "Romance"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "90 Day Fiancé",
+                "type": "Scripted",
+                "genres": [{ "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+        let scripted_series = MetadataBundle {
+            sonarr: json!({
+                "title": "30 Rock",
+                "genres": ["Comedy"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "30 Rock",
+                "type": "Scripted",
+                "genres": [{ "name": "Comedy" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+
+        assert!(
+            reality_series
+                .classification_metadata()
+                .has_explicit_reality_evidence()
+        );
+        assert!(
+            !scripted_series
+                .classification_metadata()
+                .has_explicit_reality_evidence()
+        );
+    }
+
+    #[test]
     fn compact_metadata_requires_explicit_documentary_evidence() {
         let documentary = MetadataBundle {
             sonarr: json!({
@@ -707,6 +877,89 @@ mod tests {
     }
 
     #[test]
+    fn compact_metadata_detects_docuseries_from_self_heavy_cast_roles() {
+        let documentary = MetadataBundle {
+            sonarr: json!({
+                "title": "The Yogurt Shop Murders",
+                "genres": ["Crime", "Documentary", "Mini-Series"]
+            }),
+            tmdb: Some(json!({
+                "name": "The Yogurt Shop Murders",
+                "type": "Miniseries",
+                "aggregate_credits": {
+                    "cast": [
+                        {
+                            "roles": [
+                                { "character": "Self - Lead Investigator" },
+                                { "character": "Self - Lead Investigator, 1991-1994" }
+                            ]
+                        },
+                        {
+                            "roles": [
+                                { "character": "Self - Austin Filmmaker" }
+                            ]
+                        }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(documentary.has_explicit_documentary_evidence());
+        assert!(
+            documentary
+                .tmdb
+                .as_ref()
+                .expect("tmdb")
+                .has_self_cast_evidence
+        );
+        assert!(
+            !documentary
+                .tmdb
+                .as_ref()
+                .expect("tmdb")
+                .has_named_character_cast_evidence
+        );
+    }
+
+    #[test]
+    fn compact_metadata_named_character_cast_does_not_trigger_documentary() {
+        let scripted = MetadataBundle {
+            sonarr: json!({
+                "title": "Cape Fear",
+                "genres": ["Crime", "Drama", "Mini-Series"]
+            }),
+            tmdb: Some(json!({
+                "name": "Cape Fear",
+                "type": "Miniseries",
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Max Cady" }] },
+                        { "roles": [{ "character": "Amanda Bowden" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(!scripted.tmdb.as_ref().expect("tmdb").has_self_cast_evidence);
+        assert!(
+            scripted
+                .tmdb
+                .as_ref()
+                .expect("tmdb")
+                .has_named_character_cast_evidence
+        );
+        assert!(!scripted.has_explicit_documentary_evidence());
+    }
+
+    #[test]
     fn compact_metadata_detects_explicit_miniseries_evidence() {
         let miniseries = MetadataBundle {
             sonarr: json!({
@@ -746,6 +999,34 @@ mod tests {
                 .classification_metadata()
                 .has_explicit_miniseries_evidence()
         );
+    }
+
+    #[test]
+    fn compact_metadata_keeps_miniseries_signal_without_casting_it_as_documentary() {
+        let miniseries = MetadataBundle {
+            sonarr: json!({
+                "title": "Life, Larry and the Pursuit of Unhappiness",
+                "genres": ["Comedy"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Life, Larry and the Pursuit of Unhappiness",
+                "type": "Miniseries",
+                "keywords": { "results": [{ "name": "miniseries" }, { "name": "sketch comedy" }] },
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Various Characters" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(miniseries.has_explicit_miniseries_evidence());
+        assert!(!miniseries.has_explicit_documentary_evidence());
     }
 
     fn large_metadata_bundle() -> MetadataBundle {
