@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::Utc;
 use tokio::join;
@@ -28,9 +28,7 @@ pub struct ViewStatus {
 
 #[derive(Debug, Clone)]
 pub struct StatusConfigSnapshot {
-    pub bind_address: String,
     pub webhook_auth_configured: bool,
-    pub sqlite_path: PathBuf,
     pub sonarr_base_url: String,
     pub llm_provider: LlmProvider,
     pub tmdb_configured: bool,
@@ -168,8 +166,6 @@ impl ViewStatus {
             sonarr_root_folders,
             operational: StatusOperationalSummary {
                 version: env!("CARGO_PKG_VERSION").to_string(),
-                bind_address: self.config.bind_address.clone(),
-                sqlite_path: self.config.sqlite_path.clone(),
                 webhook_auth_configured: self.config.webhook_auth_configured,
                 recent_decisions: summarize_recent_decisions(recent_decisions),
             },
@@ -337,9 +333,7 @@ mod tests {
 
     fn config() -> StatusConfigSnapshot {
         StatusConfigSnapshot {
-            bind_address: "0.0.0.0:9898".to_string(),
             webhook_auth_configured: true,
-            sqlite_path: PathBuf::from("./data/rooterr.sqlite3"),
             sonarr_base_url: "http://sonarr:8989".to_string(),
             llm_provider: LlmProvider::Ollama,
             tmdb_configured: true,
