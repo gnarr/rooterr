@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.1.5](https://github.com/gnarr/rooterr/compare/ee1a5c4a0c8473e55f3e2ea37361710da32be145..0.1.5) - 2026-06-04
+#### Bug Fixes
+- (**classification**) harden reality and docuseries routing - ([ee29c5d](https://github.com/gnarr/rooterr/commit/ee29c5dc2ea77370465a20a87663dc3658430b1c)) - Gunnar Cortes
+#### Continuous Integration
+- (**release**) cache build tooling - ([ee1a5c4](https://github.com/gnarr/rooterr/commit/ee1a5c4a0c8473e55f3e2ea37361710da32be145)) - Gunnar Cortes Heimisson
+
+- - -
+
 ## [0.1.4](https://github.com/gnarr/rooterr/compare/a0c9e0d4a48101d3985e0cf96cfe273127de1964..0.1.4) - 2026-05-24
 #### Bug Fixes
 - (**ci**) track release digests per registry - ([a0c9e0d](https://github.com/gnarr/rooterr/commit/a0c9e0d4a48101d3985e0cf96cfe273127de1964)) - Gunnar Cortes Heimisson
