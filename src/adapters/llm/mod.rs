@@ -2081,7 +2081,6 @@ mod tests {
         assert!(!eligible.iter().any(|folder| folder.path == "/tv/reality"));
         assert!(eligible.iter().any(|folder| folder.path == "/tv/scripted"));
     }
-
     fn default_regression_root_folders() -> Vec<RootFolderChoice> {
         vec![
             RootFolderChoice {
