@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.2.3](https://github.com/gnarr/rooterr/compare/406def599d1f96ef30c9d82438d12c45ecb1c6b3..0.2.3) - 2026-06-09
+#### Bug Fixes
+- (**classification**) tighten reality routing (#13) - ([406def5](https://github.com/gnarr/rooterr/commit/406def599d1f96ef30c9d82438d12c45ecb1c6b3)) - Gunnar Cortes
+
+- - -
+
 ## [0.2.2](https://github.com/gnarr/rooterr/compare/7b09026b6373a84218892819559b67c58318de26..0.2.2) - 2026-06-04
 #### Bug Fixes
 - (**classification**) restore conservative miniseries routing - ([081d19b](https://github.com/gnarr/rooterr/commit/081d19b9d859034343ca9de09e38d46419c1533e)) - Gunnar Cortes
