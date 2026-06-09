@@ -537,6 +537,7 @@ fn build_messages(
                 "Prefer a specific matching folder over a broad scripted/default folder when explicit metadata supports the specific folder. ",
                 "Provider series_type values such as standard or scripted are weak format signals; do not choose scripted only because of them. ",
                 "When a kids folder exists, explicit children or kids genres, keywords, tags, ratings, or overview signals should choose kids over scripted. ",
+                "Only choose reality when provider metadata explicitly labels the series as reality or unscripted; narrative words like reality in an overview or tagline do not count. ",
                 "Explicit reality or unscripted metadata should choose reality over scripted when a reality folder exists. ",
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted. ",
@@ -574,6 +575,7 @@ fn eligible_root_folders(
         .filter(|folder| {
             (!is_kids_root_folder(folder) || metadata.has_explicit_kids_evidence())
                 && (!is_documentary_root_folder(folder) || explicit_documentary)
+                && (!is_reality_root_folder(folder) || explicit_reality)
                 && (!explicit_talk_show || !has_talk_show_root || is_talk_show_root_folder(folder))
                 && (!explicit_reality
                     || !has_reality_root
@@ -1422,6 +1424,45 @@ mod tests {
     }
 
     #[test]
+    fn reality_root_is_not_offered_without_explicit_reality_metadata() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Shining Girls",
+                "genres": ["Crime", "Drama", "Mini-Series", "Science Fiction", "Thriller"],
+                "seriesType": "standard",
+                "overview": "Years after a brutal attack left her in a constantly shifting reality, Kirby learns that a recent murder is linked to her assault."
+            }),
+            tmdb: Some(json!({
+                "name": "Shining Girls",
+                "type": "Miniseries",
+                "genres": [{ "name": "Crime" }, { "name": "Drama" }, { "name": "Mystery" }],
+                "tagline": "Reality is a matter of perspective.",
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Kirby Mazrachi" }] },
+                        { "roles": [{ "character": "Dan Velazquez" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(!eligible.iter().any(|folder| folder.path == "/tv/reality"));
+        assert!(eligible.iter().any(|folder| folder.path == "/tv/scripted"));
+        assert!(
+            eligible
+                .iter()
+                .any(|folder| folder.path == "/tv/miniseries")
+        );
+    }
+
+    #[test]
     fn explicit_reality_metadata_only_offers_reality_over_scripted_and_miniseries() {
         let reality_metadata = MetadataBundle {
             sonarr: json!({
@@ -2003,6 +2044,42 @@ mod tests {
                 .any(|folder| folder.path == "/tv/miniseries")
         );
         assert!(!eligible.iter().any(|folder| folder.path == "/tv/scripted"));
+    }
+
+    #[test]
+    fn regression_shining_girls_does_not_offer_reality() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Shining Girls",
+                "genres": ["Crime", "Drama", "Mini-Series", "Science Fiction", "Thriller"],
+                "seriesType": "standard",
+                "network": "Apple TV",
+                "overview": "Years after a brutal attack left her in a constantly shifting reality, Kirby Mazrachi learns that a recent murder is linked to her assault.",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 8 }
+            }),
+            tmdb: Some(json!({
+                "name": "Shining Girls",
+                "type": "Miniseries",
+                "genres": [{ "name": "Crime" }, { "name": "Drama" }, { "name": "Mystery" }, { "name": "Thriller" }],
+                "tagline": "Reality is a matter of perspective.",
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Kirby Mazrachi" }] },
+                        { "roles": [{ "character": "Dan Velazquez" }] },
+                        { "roles": [{ "character": "Harper" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(!eligible.iter().any(|folder| folder.path == "/tv/reality"));
+        assert!(eligible.iter().any(|folder| folder.path == "/tv/scripted"));
     }
 
     fn default_regression_root_folders() -> Vec<RootFolderChoice> {

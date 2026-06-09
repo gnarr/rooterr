@@ -880,6 +880,33 @@ mod tests {
     }
 
     #[test]
+    fn compact_metadata_does_not_treat_narrative_reality_wording_as_reality_evidence() {
+        let scripted_series = MetadataBundle {
+            sonarr: json!({
+                "title": "Shining Girls",
+                "genres": ["Crime", "Drama", "Mini-Series", "Science Fiction", "Thriller"],
+                "seriesType": "standard",
+                "overview": "Years after a brutal attack left her in a constantly shifting reality, Kirby learns that a recent murder is linked to her assault."
+            }),
+            tmdb: Some(json!({
+                "name": "Shining Girls",
+                "type": "Miniseries",
+                "genres": [{ "name": "Crime" }, { "name": "Drama" }, { "name": "Mystery" }],
+                "tagline": "Reality is a matter of perspective."
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+
+        assert!(
+            !scripted_series
+                .classification_metadata()
+                .has_explicit_reality_evidence()
+        );
+    }
+
+    #[test]
     fn compact_metadata_requires_explicit_documentary_evidence() {
         let documentary = MetadataBundle {
             sonarr: json!({
