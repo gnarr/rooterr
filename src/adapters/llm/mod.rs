@@ -540,7 +540,7 @@ fn build_messages(
                 "Only choose reality when provider metadata explicitly labels the series as reality or unscripted; narrative words like reality in an overview or tagline do not count. ",
                 "Explicit reality or unscripted metadata should choose reality over sports, talk shows, scripted, or miniseries when a reality folder exists. ",
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
-                "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted. ",
+                "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted or self-cast-only docuseries evidence. ",
                 "Only choose sports when provider metadata explicitly labels the series as sport or sports; sports-adjacent subjects, teams, competitions, or network wording alone do not make a series sports. ",
                 "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
                 "Treat miniseries as a structural hint, not a content-type override: strong documentary evidence beats reality or miniseries, reality beats scripted or miniseries, and clear scripted evidence can still belong in scripted when miniseries metadata is weak or ambiguous. ",
@@ -639,6 +639,17 @@ fn validate_grounded_classification(
     }
 
     let has_documentary_root = root_folders.iter().any(is_documentary_root_folder);
+    if is_documentary_root_folder(folder)
+        && !is_reality_root_folder(folder)
+        && !is_talk_show_root_folder(folder)
+        && !metadata.has_explicit_documentary_evidence()
+    {
+        bail!(
+            "LLM selected documentary root folder '{}' without explicit documentary metadata evidence",
+            folder.path
+        );
+    }
+
     if is_reality_root_folder(folder)
         && !is_documentary_root_folder(folder)
         && metadata.has_strong_explicit_documentary_evidence()
@@ -1876,6 +1887,46 @@ mod tests {
     }
 
     #[test]
+    fn documentary_classification_requires_explicit_documentary_metadata() {
+        let talk_show_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Traitors: Uncloaked",
+                "genres": ["Talk Show"]
+            }),
+            tmdb: Some(json!({
+                "name": "The Traitors: Uncloaked",
+                "type": "Talk Show",
+                "genres": [{ "name": "Talk" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![RootFolderChoice {
+            path: "/tv/documentary".to_string(),
+            label: Some("Documentary".to_string()),
+            description: Some("Documentaries and docuseries.".to_string()),
+        }];
+        let classification = Classification {
+            root_folder_path: "/tv/documentary".to_string(),
+            confidence: 0.95,
+            reason: "Self cast roles.".to_string(),
+            signals: vec!["Self".to_string()],
+        };
+
+        let error =
+            validate_grounded_classification(&classification, &talk_show_metadata, &root_folders)
+                .expect_err("ungrounded documentary classification");
+
+        assert!(
+            error
+                .to_string()
+                .contains("without explicit documentary metadata")
+        );
+    }
+
+    #[test]
     fn explicit_documentary_metadata_keeps_documentary_root() {
         let documentary = MetadataBundle {
             sonarr: json!({
@@ -2452,6 +2503,76 @@ mod tests {
         let eligible = eligible_root_folders(&metadata, &root_folders);
 
         assert_eq!(eligible, vec![root_folders[1].clone()]);
+    }
+
+    #[test]
+    fn regression_traitors_uncloaked_prefers_talk_shows() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Traitors: Uncloaked",
+                "genres": ["Talk Show"],
+                "seriesType": "standard",
+                "network": "BBC One",
+                "overview": "Catch up from the castle. The latest banished and murdered have their say with Ed Gamble."
+            }),
+            tmdb: Some(json!({
+                "name": "The Traitors: Uncloaked",
+                "type": "Talk Show",
+                "genres": [{ "name": "Talk" }],
+                "keywords": {
+                    "results": [
+                        { "name": "game show" },
+                        { "name": "behind the scenes" },
+                        { "name": "reality tv" },
+                        { "name": "podcast" }
+                    ]
+                },
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Self - Host" }] },
+                        { "roles": [{ "character": "Self" }] },
+                        { "roles": [{ "character": "Self" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "The Traitors: Uncloaked",
+                        "type": "Talk Show",
+                        "genres": [{ "name": "Talk Show" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("Default scripted shows.".to_string()),
+            },
+        ];
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[2].clone()]);
     }
 
     #[test]
