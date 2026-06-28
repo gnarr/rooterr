@@ -542,7 +542,7 @@ fn build_messages(
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted. ",
                 "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
-                "Treat miniseries as a structural hint, not a content-type override: documentary beats miniseries, reality beats scripted or miniseries, and clear scripted evidence can still belong in scripted when miniseries metadata is weak or ambiguous. ",
+                "Treat miniseries as a structural hint, not a content-type override: documentary beats reality or miniseries, reality beats scripted or miniseries, and clear scripted evidence can still belong in scripted when miniseries metadata is weak or ambiguous. ",
                 "When limited-series metadata is strongly corroborated by short-run structure, limited-series season naming, or cross-provider support, prefer miniseries over generic scripted. ",
                 "Animation alone is not a kids signal. ",
                 "Prefer obvious categories like anime, documentary, kids, miniseries, reality, scripted, sports, or talkshows when the metadata supports them."
@@ -580,7 +580,8 @@ fn eligible_root_folders(
                 && (!explicit_talk_show || !has_talk_show_root || is_talk_show_root_folder(folder))
                 && (!explicit_documentary
                     || !has_documentary_root
-                    || !is_scripted_or_miniseries_root_folder(folder)
+                    || (!is_reality_root_folder(folder)
+                        && !is_scripted_or_miniseries_root_folder(folder))
                     || is_documentary_root_folder(folder))
                 && (!explicit_reality
                     || !has_reality_root
@@ -615,6 +616,16 @@ fn validate_grounded_classification(
     }
 
     let has_documentary_root = root_folders.iter().any(is_documentary_root_folder);
+    if is_reality_root_folder(folder)
+        && metadata.has_explicit_documentary_evidence()
+        && has_documentary_root
+    {
+        bail!(
+            "LLM selected reality root '{}' despite explicit documentary metadata evidence",
+            folder.path
+        );
+    }
+
     if is_scripted_root_folder(folder)
         && metadata.has_explicit_documentary_evidence()
         && has_documentary_root
@@ -1677,6 +1688,77 @@ mod tests {
     }
 
     #[test]
+    fn explicit_documentary_metadata_only_offers_documentary_over_reality() {
+        let documentary_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "genres": ["Documentary", "Reality"],
+                "seriesType": "standard",
+                "network": "Netflix"
+            }),
+            tmdb: Some(json!({
+                "name": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "type": "Documentary",
+                "genres": [{ "name": "Documentary" }, { "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+        ];
+
+        assert_eq!(
+            eligible_root_folders(&documentary_metadata, &root_folders),
+            vec![root_folders[0].clone()]
+        );
+    }
+
+    #[test]
+    fn reality_classification_is_rejected_when_documentary_is_explicit() {
+        let documentary_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "genres": ["Documentary", "Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "type": "Documentary",
+                "genres": [{ "name": "Documentary" }, { "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let classification = Classification {
+            root_folder_path: "/tv/reality".to_string(),
+            confidence: 0.95,
+            reason: "Reality genre.".to_string(),
+            signals: vec!["Reality".to_string()],
+        };
+
+        let error =
+            validate_grounded_classification(&classification, &documentary_metadata, &root_folders)
+                .expect_err("ungrounded reality classification");
+
+        assert!(error.to_string().contains("explicit documentary metadata"));
+    }
+
+    #[test]
     fn scripted_classification_is_rejected_when_documentary_is_explicit() {
         let documentary_metadata = MetadataBundle {
             sonarr: json!({
@@ -2037,6 +2119,43 @@ mod tests {
                         "genres": [
                             { "name": "Documentary" },
                             { "name": "Crime" }
+                        ]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[0].clone()]);
+    }
+
+    #[test]
+    fn regression_americas_sweethearts_prefers_documentary() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "genres": ["Documentary", "Reality"],
+                "seriesType": "standard",
+                "network": "Netflix"
+            }),
+            tmdb: Some(json!({
+                "name": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "type": "Documentary",
+                "genres": [{ "name": "Documentary" }, { "name": "Reality" }],
+                "number_of_episodes": 7,
+                "number_of_seasons": 1
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                        "genres": [
+                            { "name": "Documentary" },
+                            { "name": "Reality" }
                         ]
                     }
                 }
