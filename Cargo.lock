@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "rooterr"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
