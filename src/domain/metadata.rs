@@ -244,9 +244,13 @@ impl CompactSeriesMetadata {
             || self
                 .genres
                 .iter()
-                .chain(self.keywords.iter())
                 .chain(self.tags.iter())
                 .any(|value| is_explicit_reality_label(value))
+            || (!self.has_explicit_talk_show_evidence()
+                && self
+                    .keywords
+                    .iter()
+                    .any(|value| is_explicit_reality_label(value)))
     }
 
     fn has_explicit_sports_evidence(&self) -> bool {
@@ -271,14 +275,14 @@ impl CompactSeriesMetadata {
                 .chain(self.keywords.iter())
                 .chain(self.tags.iter())
                 .any(|value| is_explicit_documentary_label(value))
-            || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
+            || self.has_self_cast_documentary_evidence()
     }
 
     fn has_strong_explicit_documentary_evidence(&self) -> bool {
         self.series_type
             .as_deref()
             .is_some_and(is_explicit_documentary_label)
-            || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
+            || self.has_self_cast_documentary_evidence()
     }
 
     pub fn has_explicit_miniseries_evidence(&self) -> bool {
@@ -307,6 +311,12 @@ impl CompactSeriesMetadata {
         self.season_name_samples
             .iter()
             .any(|value| is_limited_series_season_name(value))
+    }
+
+    fn has_self_cast_documentary_evidence(&self) -> bool {
+        self.has_self_cast_evidence
+            && !self.has_named_character_cast_evidence
+            && !self.has_explicit_talk_show_evidence()
     }
 }
 
@@ -955,6 +965,35 @@ mod tests {
     }
 
     #[test]
+    fn compact_metadata_does_not_let_reality_keywords_override_talk_show_type() {
+        let talk_show = MetadataBundle {
+            sonarr: json!({
+                "title": "The Traitors: Uncloaked",
+                "genres": ["Talk Show"]
+            }),
+            tmdb: Some(json!({
+                "name": "The Traitors: Uncloaked",
+                "type": "Talk Show",
+                "genres": [{ "name": "Talk" }],
+                "keywords": {
+                    "results": [
+                        { "name": "reality tv" },
+                        { "name": "reality show" }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+
+        let metadata = talk_show.classification_metadata();
+
+        assert!(metadata.has_explicit_talk_show_evidence());
+        assert!(!metadata.has_explicit_reality_evidence());
+    }
+
+    #[test]
     fn compact_metadata_detects_explicit_sports_evidence() {
         let sports_series = MetadataBundle {
             sonarr: json!({
@@ -1143,6 +1182,43 @@ mod tests {
                 .expect("tmdb")
                 .has_named_character_cast_evidence
         );
+    }
+
+    #[test]
+    fn compact_metadata_does_not_infer_documentary_from_talk_show_self_cast() {
+        let talk_show = MetadataBundle {
+            sonarr: json!({
+                "title": "The Traitors: Uncloaked",
+                "genres": ["Talk Show"]
+            }),
+            tmdb: Some(json!({
+                "name": "The Traitors: Uncloaked",
+                "type": "Talk Show",
+                "genres": [{ "name": "Talk" }],
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Self - Host" }] },
+                        { "roles": [{ "character": "Self" }] },
+                        { "roles": [{ "character": "Self" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(talk_show.has_explicit_talk_show_evidence());
+        assert!(
+            talk_show
+                .tmdb
+                .as_ref()
+                .expect("tmdb")
+                .has_self_cast_evidence
+        );
+        assert!(!talk_show.has_explicit_documentary_evidence());
+        assert!(!talk_show.has_strong_explicit_documentary_evidence());
     }
 
     #[test]
