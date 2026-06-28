@@ -538,7 +538,7 @@ fn build_messages(
                 "Provider series_type values such as standard or scripted are weak format signals; do not choose scripted only because of them. ",
                 "When a kids folder exists, explicit children or kids genres, keywords, tags, ratings, or overview signals should choose kids over scripted. ",
                 "Only choose reality when provider metadata explicitly labels the series as reality or unscripted; narrative words like reality in an overview or tagline do not count. ",
-                "Explicit reality or unscripted metadata should choose reality over scripted when a reality folder exists. ",
+                "Explicit reality or unscripted metadata should choose reality over talk shows, scripted, or miniseries when a reality folder exists. ",
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted. ",
                 "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
@@ -577,7 +577,10 @@ fn eligible_root_folders(
             (!is_kids_root_folder(folder) || metadata.has_explicit_kids_evidence())
                 && (!is_documentary_root_folder(folder) || explicit_documentary)
                 && (!is_reality_root_folder(folder) || explicit_reality)
-                && (!explicit_talk_show || !has_talk_show_root || is_talk_show_root_folder(folder))
+                && (!explicit_talk_show
+                    || !has_talk_show_root
+                    || !is_scripted_or_miniseries_root_folder(folder)
+                    || is_talk_show_root_folder(folder))
                 && (!explicit_documentary
                     || !has_documentary_root
                     || (!is_reality_root_folder(folder)
@@ -585,7 +588,8 @@ fn eligible_root_folders(
                     || is_documentary_root_folder(folder))
                 && (!explicit_reality
                     || !has_reality_root
-                    || !is_scripted_or_miniseries_root_folder(folder)
+                    || (!is_talk_show_root_folder(folder)
+                        && !is_scripted_or_miniseries_root_folder(folder))
                     || is_reality_root_folder(folder))
                 && (!strong_miniseries
                     || !has_miniseries_root
@@ -648,6 +652,17 @@ fn validate_grounded_classification(
     }
 
     let has_reality_root = root_folders.iter().any(is_reality_root_folder);
+    if is_talk_show_root_folder(folder)
+        && !is_reality_root_folder(folder)
+        && metadata.has_explicit_reality_evidence()
+        && has_reality_root
+    {
+        bail!(
+            "LLM selected talk show root '{}' despite explicit reality metadata evidence",
+            folder.path
+        );
+    }
+
     if is_scripted_root_folder(folder)
         && metadata.has_explicit_reality_evidence()
         && has_reality_root
@@ -1355,7 +1370,7 @@ mod tests {
         assert!(system_prompt.contains("series_type values such as standard or scripted"));
         assert!(system_prompt.contains("should choose kids over scripted"));
         assert!(system_prompt.contains("Never invent kids evidence"));
-        assert!(system_prompt.contains("choose reality over scripted"));
+        assert!(system_prompt.contains("choose reality over talk shows"));
         assert!(system_prompt.contains("Treat miniseries as a structural hint"));
         assert!(system_prompt.contains("strongly corroborated"));
     }
@@ -1490,16 +1505,16 @@ mod tests {
     }
 
     #[test]
-    fn explicit_reality_metadata_only_offers_reality_over_scripted_and_miniseries() {
+    fn explicit_reality_metadata_only_offers_reality_over_talk_show_scripted_and_miniseries() {
         let reality_metadata = MetadataBundle {
             sonarr: json!({
-                "title": "90 Day: The Last Resort Between The Sheets",
+                "title": "Teen Mom: The Next Chapter",
                 "genres": ["Reality"],
                 "seriesType": "standard"
             }),
             tmdb: Some(json!({
-                "name": "90 Day: The Last Resort Between The Sheets",
-                "type": "Scripted",
+                "name": "Teen Mom: The Next Chapter",
+                "type": "Talk Show",
                 "genres": [{ "name": "Reality" }]
             })),
             tmdb_error: None,
@@ -1512,6 +1527,11 @@ mod tests {
                 path: "/tv/reality".to_string(),
                 label: Some("Reality".to_string()),
                 description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
             },
             RootFolderChoice {
                 path: "/tv/miniseries".to_string(),
@@ -1606,6 +1626,50 @@ mod tests {
         assert_eq!(eligible, vec![root_folders[0].clone()]);
         assert!(prompt.contains("/tv/talkshows"));
         assert!(!prompt.contains("/tv/scripted"));
+    }
+
+    #[test]
+    fn explicit_talk_show_metadata_keeps_specific_non_scripted_roots_available() {
+        let talk_show_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Interview Show",
+                "genres": ["Documentary", "Talk Show"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "The Interview Show",
+                "type": "Talk Show",
+                "genres": [{ "name": "Documentary" }, { "name": "Talk" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("General scripted television.".to_string()),
+            },
+        ];
+
+        let eligible = eligible_root_folders(&talk_show_metadata, &root_folders);
+
+        assert_eq!(
+            eligible,
+            vec![root_folders[0].clone(), root_folders[1].clone()]
+        );
     }
 
     #[test]
@@ -1880,6 +1944,88 @@ mod tests {
     }
 
     #[test]
+    fn talk_show_classification_is_rejected_when_reality_is_explicit() {
+        let reality_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Teen Mom: The Next Chapter",
+                "genres": ["Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Teen Mom: The Next Chapter",
+                "type": "Talk Show",
+                "genres": [{ "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+        ];
+        let classification = Classification {
+            root_folder_path: "/tv/talkshows".to_string(),
+            confidence: 0.95,
+            reason: "TMDB type says talk show.".to_string(),
+            signals: vec!["type: Talk Show".to_string()],
+        };
+
+        let error =
+            validate_grounded_classification(&classification, &reality_metadata, &root_folders)
+                .expect_err("ungrounded talk show classification");
+
+        assert!(error.to_string().contains("explicit reality metadata"));
+    }
+
+    #[test]
+    fn mixed_reality_talk_show_root_is_allowed_for_reality_metadata() {
+        let reality_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Teen Mom: The Next Chapter",
+                "genres": ["Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Teen Mom: The Next Chapter",
+                "type": "Talk Show",
+                "genres": [{ "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![RootFolderChoice {
+            path: "/tv/reality-talkshows".to_string(),
+            label: Some("Reality Talk Shows".to_string()),
+            description: Some("Reality, unscripted, and talk show formats.".to_string()),
+        }];
+        let classification = Classification {
+            root_folder_path: "/tv/reality-talkshows".to_string(),
+            confidence: 0.95,
+            reason: "Reality genre.".to_string(),
+            signals: vec!["Reality".to_string()],
+        };
+
+        assert_eq!(
+            eligible_root_folders(&reality_metadata, &root_folders),
+            root_folders
+        );
+        validate_grounded_classification(&classification, &reality_metadata, &root_folders)
+            .expect("mixed reality/talk-show root is grounded by reality metadata");
+    }
+
+    #[test]
     fn miniseries_classification_is_rejected_when_documentary_is_explicit() {
         let documentary_metadata = MetadataBundle {
             sonarr: json!({
@@ -2040,6 +2186,47 @@ mod tests {
         let eligible = eligible_root_folders(&metadata, &root_folders);
 
         assert_eq!(eligible, vec![root_folders[3].clone()]);
+    }
+
+    #[test]
+    fn regression_teen_mom_next_chapter_prefers_reality() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Teen Mom: The Next Chapter",
+                "genres": ["Reality"],
+                "seriesType": "standard",
+                "network": "MTV"
+            }),
+            tmdb: Some(json!({
+                "name": "Teen Mom: The Next Chapter",
+                "type": "Talk Show",
+                "genres": [{ "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("Default scripted shows.".to_string()),
+            },
+        ];
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[0].clone()]);
     }
 
     #[test]
