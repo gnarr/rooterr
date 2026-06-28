@@ -579,7 +579,7 @@ fn eligible_root_folders(
                 && (!is_reality_root_folder(folder) || explicit_reality)
                 && (!explicit_talk_show
                     || !has_talk_show_root
-                    || (explicit_reality && has_reality_root && is_reality_root_folder(folder))
+                    || !is_scripted_or_miniseries_root_folder(folder)
                     || is_talk_show_root_folder(folder))
                 && (!explicit_documentary
                     || !has_documentary_root
@@ -1626,6 +1626,50 @@ mod tests {
         assert_eq!(eligible, vec![root_folders[0].clone()]);
         assert!(prompt.contains("/tv/talkshows"));
         assert!(!prompt.contains("/tv/scripted"));
+    }
+
+    #[test]
+    fn explicit_talk_show_metadata_keeps_specific_non_scripted_roots_available() {
+        let talk_show_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "The Interview Show",
+                "genres": ["Documentary", "Talk Show"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "The Interview Show",
+                "type": "Talk Show",
+                "genres": [{ "name": "Documentary" }, { "name": "Talk" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("General scripted television.".to_string()),
+            },
+        ];
+
+        let eligible = eligible_root_folders(&talk_show_metadata, &root_folders);
+
+        assert_eq!(
+            eligible,
+            vec![root_folders[0].clone(), root_folders[1].clone()]
+        );
     }
 
     #[test]
