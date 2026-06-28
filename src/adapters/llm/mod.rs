@@ -617,6 +617,7 @@ fn validate_grounded_classification(
 
     let has_documentary_root = root_folders.iter().any(is_documentary_root_folder);
     if is_reality_root_folder(folder)
+        && !is_documentary_root_folder(folder)
         && metadata.has_explicit_documentary_evidence()
         && has_documentary_root
     {
@@ -1756,6 +1757,39 @@ mod tests {
                 .expect_err("ungrounded reality classification");
 
         assert!(error.to_string().contains("explicit documentary metadata"));
+    }
+
+    #[test]
+    fn mixed_documentary_reality_root_is_allowed_for_documentary_metadata() {
+        let documentary_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "genres": ["Documentary", "Reality"]
+            }),
+            tmdb: None,
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![RootFolderChoice {
+            path: "/tv/documentary-reality".to_string(),
+            label: Some("Documentary Reality".to_string()),
+            description: Some("Documentaries, docuseries, and unscripted reality.".to_string()),
+        }];
+        let classification = Classification {
+            root_folder_path: "/tv/documentary-reality".to_string(),
+            confidence: 0.95,
+            reason: "Documentary genre.".to_string(),
+            signals: vec!["Documentary".to_string()],
+        };
+
+        assert_eq!(
+            eligible_root_folders(&documentary_metadata, &root_folders),
+            root_folders
+        );
+        validate_grounded_classification(&classification, &documentary_metadata, &root_folders)
+            .expect("mixed documentary/reality root is grounded by documentary metadata");
     }
 
     #[test]
