@@ -66,11 +66,33 @@ impl ClassificationMetadata {
             .any(CompactSeriesMetadata::has_explicit_reality_evidence)
     }
 
+    pub fn has_explicit_sports_evidence(&self) -> bool {
+        std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .any(CompactSeriesMetadata::has_explicit_sports_evidence)
+    }
+
     pub fn has_explicit_documentary_evidence(&self) -> bool {
         std::iter::once(&self.sonarr)
             .chain(self.tmdb.iter())
             .chain(self.tvdb.iter())
             .any(CompactSeriesMetadata::has_explicit_documentary_evidence)
+    }
+
+    pub fn has_strong_explicit_documentary_evidence(&self) -> bool {
+        let explicit_supporting_sources = std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .filter(|metadata| metadata.has_explicit_documentary_evidence())
+            .count();
+        let has_provider_level_strong_evidence = std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .any(CompactSeriesMetadata::has_strong_explicit_documentary_evidence);
+
+        self.has_explicit_documentary_evidence()
+            && (has_provider_level_strong_evidence || explicit_supporting_sources >= 2)
     }
 
     pub fn has_explicit_miniseries_evidence(&self) -> bool {
@@ -227,6 +249,18 @@ impl CompactSeriesMetadata {
                 .any(|value| is_explicit_reality_label(value))
     }
 
+    fn has_explicit_sports_evidence(&self) -> bool {
+        self.series_type
+            .as_deref()
+            .is_some_and(is_explicit_sports_label)
+            || self
+                .genres
+                .iter()
+                .chain(self.keywords.iter())
+                .chain(self.tags.iter())
+                .any(|value| is_explicit_sports_label(value))
+    }
+
     fn has_explicit_documentary_evidence(&self) -> bool {
         self.series_type
             .as_deref()
@@ -237,6 +271,13 @@ impl CompactSeriesMetadata {
                 .chain(self.keywords.iter())
                 .chain(self.tags.iter())
                 .any(|value| is_explicit_documentary_label(value))
+            || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
+    }
+
+    fn has_strong_explicit_documentary_evidence(&self) -> bool {
+        self.series_type
+            .as_deref()
+            .is_some_and(is_explicit_documentary_label)
             || (self.has_self_cast_evidence && !self.has_named_character_cast_evidence)
     }
 
@@ -292,6 +333,13 @@ fn is_explicit_reality_label(value: &str) -> bool {
             | "competition reality"
             | "dating reality"
             | "lifestyle reality"
+    )
+}
+
+fn is_explicit_sports_label(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "sport" | "sports" | "sports documentary" | "sports documentaries"
     )
 }
 
@@ -907,6 +955,47 @@ mod tests {
     }
 
     #[test]
+    fn compact_metadata_detects_explicit_sports_evidence() {
+        let sports_series = MetadataBundle {
+            sonarr: json!({
+                "title": "Match of the Day",
+                "genres": ["Sports"],
+                "seriesType": "standard"
+            }),
+            tmdb: None,
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+        let reality_series = MetadataBundle {
+            sonarr: json!({
+                "title": "Teen Mom: The Next Chapter",
+                "genres": ["Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Teen Mom: The Next Chapter",
+                "type": "Reality",
+                "genres": [{ "name": "Reality" }, { "name": "Documentary" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+
+        assert!(
+            sports_series
+                .classification_metadata()
+                .has_explicit_sports_evidence()
+        );
+        assert!(
+            !reality_series
+                .classification_metadata()
+                .has_explicit_sports_evidence()
+        );
+    }
+
+    #[test]
     fn compact_metadata_requires_explicit_documentary_evidence() {
         let documentary = MetadataBundle {
             sonarr: json!({
@@ -948,6 +1037,62 @@ mod tests {
             !historical_drama
                 .classification_metadata()
                 .has_explicit_documentary_evidence()
+        );
+    }
+
+    #[test]
+    fn compact_metadata_distinguishes_strong_documentary_evidence() {
+        let strong_documentary = MetadataBundle {
+            sonarr: json!({
+                "title": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "genres": ["Documentary", "Reality"]
+            }),
+            tmdb: Some(json!({
+                "name": "America's Sweethearts: Dallas Cowboys Cheerleaders",
+                "type": "Documentary",
+                "genres": [{ "name": "Documentary" }, { "name": "Reality" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        };
+        let weak_documentary = MetadataBundle {
+            sonarr: json!({
+                "title": "Teen Mom: The Next Chapter",
+                "genres": ["Reality"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Teen Mom: The Next Chapter",
+                "type": "Reality",
+                "genres": [{ "name": "Reality" }, { "name": "Documentary" }]
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Teen Mom: The Next Chapter",
+                        "genres": [{ "name": "Reality" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        };
+
+        assert!(
+            strong_documentary
+                .classification_metadata()
+                .has_strong_explicit_documentary_evidence()
+        );
+        assert!(
+            weak_documentary
+                .classification_metadata()
+                .has_explicit_documentary_evidence()
+        );
+        assert!(
+            !weak_documentary
+                .classification_metadata()
+                .has_strong_explicit_documentary_evidence()
         );
     }
 
