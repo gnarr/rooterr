@@ -565,6 +565,7 @@ fn eligible_root_folders(
     let explicit_talk_show = metadata.has_explicit_talk_show_evidence();
     let has_talk_show_root = root_folders.iter().any(is_talk_show_root_folder);
     let explicit_documentary = metadata.has_explicit_documentary_evidence();
+    let has_documentary_root = root_folders.iter().any(is_documentary_root_folder);
     let explicit_reality = metadata.has_explicit_reality_evidence();
     let has_reality_root = root_folders.iter().any(is_reality_root_folder);
     let strong_miniseries = metadata.has_strong_explicit_miniseries_evidence();
@@ -577,6 +578,10 @@ fn eligible_root_folders(
                 && (!is_documentary_root_folder(folder) || explicit_documentary)
                 && (!is_reality_root_folder(folder) || explicit_reality)
                 && (!explicit_talk_show || !has_talk_show_root || is_talk_show_root_folder(folder))
+                && (!explicit_documentary
+                    || !has_documentary_root
+                    || !is_scripted_or_miniseries_root_folder(folder)
+                    || is_documentary_root_folder(folder))
                 && (!explicit_reality
                     || !has_reality_root
                     || !is_scripted_or_miniseries_root_folder(folder)
@@ -610,6 +615,16 @@ fn validate_grounded_classification(
     }
 
     let has_documentary_root = root_folders.iter().any(is_documentary_root_folder);
+    if is_scripted_root_folder(folder)
+        && metadata.has_explicit_documentary_evidence()
+        && has_documentary_root
+    {
+        bail!(
+            "LLM selected scripted root '{}' despite explicit documentary metadata evidence",
+            folder.path
+        );
+    }
+
     if is_miniseries_root_folder(folder)
         && metadata.has_explicit_documentary_evidence()
         && has_documentary_root
@@ -1662,6 +1677,49 @@ mod tests {
     }
 
     #[test]
+    fn scripted_classification_is_rejected_when_documentary_is_explicit() {
+        let documentary_metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Love You to Death: The Kelly Cochran Story",
+                "genres": ["Crime", "Documentary"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Love You to Death: The Kelly Cochran Story",
+                "type": "Scripted",
+                "genres": [{ "name": "Crime" }, { "name": "Documentary" }]
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Love You to Death: The Kelly Cochran Story",
+                        "genres": [
+                            { "name": "Documentary" },
+                            { "name": "Crime" }
+                        ]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let classification = Classification {
+            root_folder_path: "/tv/scripted".to_string(),
+            confidence: 0.95,
+            reason: "TMDB type says scripted.".to_string(),
+            signals: vec!["type: Scripted".to_string()],
+        };
+
+        let error =
+            validate_grounded_classification(&classification, &documentary_metadata, &root_folders)
+                .expect_err("ungrounded scripted classification");
+
+        assert!(error.to_string().contains("explicit documentary metadata"));
+    }
+
+    #[test]
     fn scripted_classification_is_rejected_when_reality_is_explicit() {
         let reality_metadata = MetadataBundle {
             sonarr: json!({
@@ -1953,6 +2011,43 @@ mod tests {
         assert!(
             validate_grounded_classification(&classification, &metadata, &root_folders).is_err()
         );
+    }
+
+    #[test]
+    fn regression_kelly_cochran_story_prefers_documentary() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Love You to Death: The Kelly Cochran Story",
+                "genres": ["Crime", "Documentary"],
+                "seriesType": "standard",
+                "network": "Fox Nation"
+            }),
+            tmdb: Some(json!({
+                "name": "Love You to Death: The Kelly Cochran Story",
+                "type": "Scripted",
+                "genres": [{ "name": "Crime" }, { "name": "Documentary" }],
+                "number_of_episodes": 6,
+                "number_of_seasons": 1
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Love You to Death: The Kelly Cochran Story",
+                        "genres": [
+                            { "name": "Documentary" },
+                            { "name": "Crime" }
+                        ]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[0].clone()]);
     }
 
     #[test]
