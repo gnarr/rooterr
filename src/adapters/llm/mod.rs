@@ -538,7 +538,7 @@ fn build_messages(
                 "Provider series_type values such as standard or scripted are weak format signals; do not choose scripted only because of them. ",
                 "When a kids folder exists, explicit children or kids genres, keywords, tags, ratings, or overview signals should choose kids over scripted. ",
                 "Only choose reality when provider metadata explicitly labels the series as reality or unscripted; narrative words like reality in an overview or tagline do not count. ",
-                "Explicit reality or unscripted metadata should choose reality over sports, talk shows, scripted, or miniseries when a reality folder exists. ",
+                "Explicit reality or unscripted metadata should choose reality over sports, talk shows, scripted, miniseries, or self-cast-only docuseries evidence when a reality folder exists. ",
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted or self-cast-only docuseries evidence. ",
                 "Only choose sports when provider metadata explicitly labels the series as sport or sports; sports-adjacent subjects, teams, competitions, or network wording alone do not make a series sports. ",
@@ -2488,6 +2488,75 @@ mod tests {
                 path: "/tv/sports".to_string(),
                 label: Some("Sports".to_string()),
                 description: Some("Sports programming and competition broadcasts.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("Default scripted shows.".to_string()),
+            },
+        ];
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[1].clone()]);
+    }
+
+    #[test]
+    fn regression_below_deck_mediterranean_prefers_reality() {
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Below Deck Mediterranean",
+                "genres": ["Reality"],
+                "seriesType": "standard",
+                "network": "Bravo",
+                "overview": "Follows nine crew members living and working aboard a mega-yacht as it undertakes a new charter season in the Mediterranean."
+            }),
+            tmdb: Some(json!({
+                "name": "Below Deck Mediterranean",
+                "type": "Reality",
+                "genres": [{ "name": "Reality" }],
+                "keywords": {
+                    "results": [
+                        { "name": "spin off" },
+                        { "name": "charter" }
+                    ]
+                },
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Self" }] },
+                        { "roles": [{ "character": "Self" }] },
+                        { "roles": [{ "character": "Self" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Below Deck Mediterranean",
+                        "type": "Reality",
+                        "genres": [{ "name": "Reality" }],
+                        "tags": [{ "name": "Non-Competition Reality" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
             },
             RootFolderChoice {
                 path: "/tv/talkshows".to_string(),

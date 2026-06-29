@@ -317,6 +317,7 @@ impl CompactSeriesMetadata {
         self.has_self_cast_evidence
             && !self.has_named_character_cast_evidence
             && !self.has_explicit_talk_show_evidence()
+            && !self.has_explicit_reality_evidence()
     }
 }
 
@@ -1219,6 +1220,43 @@ mod tests {
         );
         assert!(!talk_show.has_explicit_documentary_evidence());
         assert!(!talk_show.has_strong_explicit_documentary_evidence());
+    }
+
+    #[test]
+    fn compact_metadata_does_not_infer_documentary_from_reality_self_cast() {
+        let reality = MetadataBundle {
+            sonarr: json!({
+                "title": "Below Deck Mediterranean",
+                "genres": ["Reality"]
+            }),
+            tmdb: Some(json!({
+                "name": "Below Deck Mediterranean",
+                "type": "Reality",
+                "genres": [{ "name": "Reality" }],
+                "aggregate_credits": {
+                    "cast": [
+                        { "roles": [{ "character": "Self" }] },
+                        { "roles": [{ "character": "Self" }] },
+                        { "roles": [{ "character": "Self" }] }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(reality.has_explicit_reality_evidence());
+        assert!(
+            reality
+                .tmdb
+                .as_ref()
+                .expect("tmdb")
+                .has_self_cast_evidence
+        );
+        assert!(!reality.has_explicit_documentary_evidence());
+        assert!(!reality.has_strong_explicit_documentary_evidence());
     }
 
     #[test]
