@@ -59,6 +59,23 @@ impl ClassificationMetadata {
             .any(CompactSeriesMetadata::has_explicit_talk_show_evidence)
     }
 
+    pub fn has_strong_explicit_talk_show_evidence(&self) -> bool {
+        // A talk-show series type is authoritative, but a single mistyped `type`
+        // field should not override a reality genre on its own. Require the type
+        // to be corroborated by a talk or talk-show genre/keyword/tag from any
+        // provider before it outranks reality.
+        let has_type = std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .any(CompactSeriesMetadata::has_talk_show_type_evidence);
+        let has_label = std::iter::once(&self.sonarr)
+            .chain(self.tmdb.iter())
+            .chain(self.tvdb.iter())
+            .any(CompactSeriesMetadata::has_talk_show_label_evidence);
+
+        has_type && has_label
+    }
+
     pub fn has_explicit_reality_evidence(&self) -> bool {
         std::iter::once(&self.sonarr)
             .chain(self.tmdb.iter())
@@ -225,16 +242,22 @@ impl CompactSeriesMetadata {
             })
     }
 
-    fn has_explicit_talk_show_evidence(&self) -> bool {
+    fn has_talk_show_type_evidence(&self) -> bool {
         self.series_type
             .as_deref()
             .is_some_and(is_explicit_talk_show_label)
-            || self
-                .genres
-                .iter()
-                .chain(self.keywords.iter())
-                .chain(self.tags.iter())
-                .any(|value| is_explicit_talk_show_label(value))
+    }
+
+    fn has_talk_show_label_evidence(&self) -> bool {
+        self.genres
+            .iter()
+            .chain(self.keywords.iter())
+            .chain(self.tags.iter())
+            .any(|value| is_explicit_talk_show_label(value))
+    }
+
+    fn has_explicit_talk_show_evidence(&self) -> bool {
+        self.has_talk_show_type_evidence() || self.has_talk_show_label_evidence()
     }
 
     fn has_explicit_reality_evidence(&self) -> bool {
@@ -992,6 +1015,67 @@ mod tests {
 
         assert!(metadata.has_explicit_talk_show_evidence());
         assert!(!metadata.has_explicit_reality_evidence());
+    }
+
+    #[test]
+    fn compact_metadata_talk_show_type_outranks_reality_genre() {
+        // A talk-show series type from any provider is strong evidence even when
+        // another provider tags the series with a "Reality" genre.
+        let dr_phil = MetadataBundle {
+            sonarr: json!({
+                "title": "Dr. Phil",
+                "genres": ["Reality", "Talk Show", "News"],
+                "seriesType": "daily"
+            }),
+            tmdb: Some(json!({
+                "name": "Dr. Phil",
+                "type": "Talk Show",
+                "genres": [{ "name": "Talk" }]
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Dr. Phil",
+                        "genres": [{ "name": "Reality" }, { "name": "Talk Show" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(dr_phil.has_explicit_talk_show_evidence());
+        assert!(dr_phil.has_strong_explicit_talk_show_evidence());
+        // The reality genre is genuinely present; strong talk-show evidence is
+        // what resolves the tie in `eligible_root_folders`, not this predicate.
+        assert!(dr_phil.has_explicit_reality_evidence());
+    }
+
+    #[test]
+    fn compact_metadata_talk_show_genre_without_type_is_not_strong() {
+        // A talk-show *genre* without a talk-show *series type* is not strong
+        // evidence, so reality genres keep their precedence for such shows.
+        let genre_only = MetadataBundle {
+            sonarr: json!({
+                "title": "Some Reality Reunion",
+                "genres": ["Reality", "Talk Show"],
+                "seriesType": "standard"
+            }),
+            tmdb: Some(json!({
+                "name": "Some Reality Reunion",
+                "type": "Reality",
+                "genres": [{ "name": "Reality" }, { "name": "Talk" }]
+            })),
+            tmdb_error: None,
+            tvdb: None,
+            tvdb_error: None,
+        }
+        .classification_metadata();
+
+        assert!(genre_only.has_explicit_talk_show_evidence());
+        assert!(!genre_only.has_strong_explicit_talk_show_evidence());
+        assert!(genre_only.has_explicit_reality_evidence());
     }
 
     #[test]
