@@ -375,7 +375,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/gnarr/rooterr
           outputs: type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.artifact }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.artifact }},ignore-error=true
 
       - name: Build and push GHCR digest image
         id: build_ghcr
