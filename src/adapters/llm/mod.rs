@@ -541,6 +541,7 @@ fn build_messages(
                 "Explicit reality or unscripted metadata should choose reality over sports, talk shows, scripted, miniseries, or self-cast-only docuseries evidence when a reality folder exists. ",
                 "Never invent kids evidence: reality genres or a reality series type should choose reality when there is no explicit kids evidence. ",
                 "When a talk-shows folder exists, explicit talk or talk show genres or series types should choose talk shows over scripted or self-cast-only docuseries evidence. ",
+                "A talk or talk-show series type corroborated by a talk or talk-show genre should choose talk shows over a reality label that appears only as a genre. ",
                 "Only choose sports when provider metadata explicitly labels the series as sport or sports; sports-adjacent subjects, teams, competitions, or network wording alone do not make a series sports. ",
                 "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
                 "Treat miniseries as a structural hint, not a content-type override: strong documentary evidence beats reality or miniseries, reality beats scripted or miniseries, and clear scripted evidence can still belong in scripted when miniseries metadata is weak or ambiguous. ",
@@ -564,6 +565,7 @@ fn eligible_root_folders(
     root_folders: &[RootFolderChoice],
 ) -> Vec<RootFolderChoice> {
     let explicit_talk_show = metadata.has_explicit_talk_show_evidence();
+    let strong_talk_show = metadata.has_strong_explicit_talk_show_evidence();
     let has_talk_show_root = root_folders.iter().any(is_talk_show_root_folder);
     let explicit_documentary = metadata.has_explicit_documentary_evidence();
     let strong_documentary = metadata.has_strong_explicit_documentary_evidence();
@@ -593,12 +595,17 @@ fn eligible_root_folders(
                     || !has_documentary_root
                     || !is_reality_root_folder(folder)
                     || is_documentary_root_folder(folder))
+                && (!strong_talk_show
+                    || !has_talk_show_root
+                    || !is_reality_root_folder(folder)
+                    || is_talk_show_root_folder(folder))
                 && (!explicit_reality
                     || !has_reality_root
                     || strong_documentary
                     || !is_documentary_root_folder(folder)
                     || is_reality_root_folder(folder))
                 && (!explicit_reality
+                    || strong_talk_show
                     || !has_reality_root
                     || (!is_talk_show_root_folder(folder)
                         && !is_scripted_or_miniseries_root_folder(folder))
@@ -2611,6 +2618,77 @@ mod tests {
                         "name": "The Traitors: Uncloaked",
                         "type": "Talk Show",
                         "genres": [{ "name": "Talk Show" }]
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = vec![
+            RootFolderChoice {
+                path: "/tv/documentary".to_string(),
+                label: Some("Documentary".to_string()),
+                description: Some("Documentaries and docuseries.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/reality".to_string(),
+                label: Some("Reality".to_string()),
+                description: Some("Reality and unscripted shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/talkshows".to_string(),
+                label: Some("Talk Shows".to_string()),
+                description: Some("Talk shows, interviews, and late-night shows.".to_string()),
+            },
+            RootFolderChoice {
+                path: "/tv/scripted".to_string(),
+                label: Some("Scripted".to_string()),
+                description: Some("Default scripted shows.".to_string()),
+            },
+        ];
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert_eq!(eligible, vec![root_folders[2].clone()]);
+    }
+
+    #[test]
+    fn regression_dr_phil_prefers_talk_shows() {
+        // Sonarr/TVDB tag Dr. Phil with a noisy "Reality" genre alongside seven
+        // unrelated genres, but TMDB authoritatively types it "Talk Show". The
+        // explicit talk-show series type must outrank the reality genre so the
+        // talkshows folder survives instead of being stripped by the reality gate.
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Dr. Phil",
+                "genres": [
+                    "Crime", "Drama", "Family", "Mystery",
+                    "News", "Podcast", "Reality", "Talk Show"
+                ],
+                "seriesType": "daily",
+                "network": "Syndication",
+                "overview": "Dr. Phil is a talk show hosted by Phil McGraw."
+            }),
+            tmdb: Some(json!({
+                "name": "Dr. Phil",
+                "type": "Talk Show",
+                "genres": [{ "name": "Talk" }],
+                "keywords": {
+                    "results": [
+                        { "name": "talk show" },
+                        { "name": "mental health" }
+                    ]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Dr. Phil",
+                        "genres": [
+                            { "name": "Reality" },
+                            { "name": "News" },
+                            { "name": "Talk Show" }
+                        ]
                     }
                 }
             })),
