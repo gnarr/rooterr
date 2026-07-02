@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.2.10](https://github.com/gnarr/rooterr/compare/eab27bd37803010a3be88790f94bafe8a99b8a9a..0.2.10) - 2026-07-02
+#### Bug Fixes
+- (**llm**) prefer talk shows over noisy reality genres - ([eab27bd](https://github.com/gnarr/rooterr/commit/eab27bd37803010a3be88790f94bafe8a99b8a9a)) - Gunnar Cortes
+
+- - -
+
 ## [0.2.9](https://github.com/gnarr/rooterr/compare/e5e668280451d9c0884ada899b92a9ba0e7f25bc..0.2.9) - 2026-06-29
 #### Bug Fixes
 - (**llm**) prefer reality over self-cast docuseries - ([e5e6682](https://github.com/gnarr/rooterr/commit/e5e668280451d9c0884ada899b92a9ba0e7f25bc)) - Gunnar Cortes
