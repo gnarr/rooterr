@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [0.2.11](https://github.com/gnarr/rooterr/compare/a667b3d554e162e1cac7e2b29ff4d6eee8192305..0.2.11) - 2026-11-16
+#### Bug Fixes
+- (**llm**) prefer scripted for mockumentaries - ([446354a](https://github.com/gnarr/rooterr/commit/446354a0da6465b977d67f1fdf524e009c66d040)) - Gunnar Cortes
+#### Continuous Integration
+- (**release**) tolerate transient GitHub Actions cache export failures - ([a667b3d](https://github.com/gnarr/rooterr/commit/a667b3d554e162e1cac7e2b29ff4d6eee8192305)) - Gunnar Cortes
+
+- - -
+
 ## [0.2.10](https://github.com/gnarr/rooterr/compare/eab27bd37803010a3be88790f94bafe8a99b8a9a..0.2.10) - 2026-07-02
 #### Bug Fixes
 - (**llm**) prefer talk shows over noisy reality genres - ([eab27bd](https://github.com/gnarr/rooterr/commit/eab27bd37803010a3be88790f94bafe8a99b8a9a)) - Gunnar Cortes
