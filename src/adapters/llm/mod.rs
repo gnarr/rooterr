@@ -544,6 +544,7 @@ fn build_messages(
                 "A talk or talk-show series type corroborated by a talk or talk-show genre should choose talk shows over a reality label that appears only as a genre. ",
                 "Only choose sports when provider metadata explicitly labels the series as sport or sports; sports-adjacent subjects, teams, competitions, or network wording alone do not make a series sports. ",
                 "Only choose documentary for explicit documentary or docuseries metadata; self-heavy participant cast roles can support docuseries, but history, war, true-story, based-on-book, interviews, or archival source wording alone do not make a scripted series a documentary. ",
+                "Mockumentary, spoof, or parody metadata marks a scripted comedy: choose scripted over documentary or miniseries even when documentary or miniseries labels are present. ",
                 "Treat miniseries as a structural hint, not a content-type override: strong documentary evidence beats reality or miniseries, reality beats scripted or miniseries, and clear scripted evidence can still belong in scripted when miniseries metadata is weak or ambiguous. ",
                 "When limited-series metadata is strongly corroborated by short-run structure, limited-series season naming, or cross-provider support, prefer miniseries over generic scripted. ",
                 "Animation alone is not a kids signal. ",
@@ -575,6 +576,8 @@ fn eligible_root_folders(
     let explicit_sports = metadata.has_explicit_sports_evidence();
     let strong_miniseries = metadata.has_strong_explicit_miniseries_evidence();
     let has_miniseries_root = root_folders.iter().any(is_miniseries_root_folder);
+    let mockumentary = metadata.has_mockumentary_evidence();
+    let has_scripted_root = root_folders.iter().any(is_scripted_root_folder);
 
     root_folders
         .iter()
@@ -611,9 +614,14 @@ fn eligible_root_folders(
                         && !is_scripted_or_miniseries_root_folder(folder))
                     || is_reality_root_folder(folder))
                 && (!strong_miniseries
+                    || mockumentary
                     || !has_miniseries_root
                     || !is_scripted_or_miniseries_root_folder(folder)
                     || is_miniseries_root_folder(folder))
+                && (!mockumentary
+                    || !has_scripted_root
+                    || !is_miniseries_root_folder(folder)
+                    || is_scripted_root_folder(folder))
         })
         .cloned()
         .collect()
@@ -1641,7 +1649,11 @@ mod tests {
             validate_grounded_classification(&classification, &reality_metadata, &root_folders)
                 .expect_err("ungrounded sports classification");
 
-        assert!(error.to_string().contains("without explicit sports metadata"));
+        assert!(
+            error
+                .to_string()
+                .contains("without explicit sports metadata")
+        );
     }
 
     #[test]
@@ -2720,6 +2732,68 @@ mod tests {
         let eligible = eligible_root_folders(&metadata, &root_folders);
 
         assert_eq!(eligible, vec![root_folders[2].clone()]);
+    }
+
+    #[test]
+    fn regression_cunk_on_cinema_prefers_scripted() {
+        // Every provider labels this mockumentary with the documentary and
+        // miniseries formats it parodies; the mockumentary/spoof labels must
+        // keep it in scripted.
+        let metadata = MetadataBundle {
+            sonarr: json!({
+                "title": "Cunk on Cinema",
+                "genres": ["Comedy", "Documentary", "History", "Mini-Series"],
+                "seriesType": "standard",
+                "network": "BBC Two",
+                "statistics": { "seasonCount": 1, "totalEpisodeCount": 3 }
+            }),
+            tmdb: Some(json!({
+                "name": "Cunk on Cinema",
+                "type": "Miniseries",
+                "status": "Returning Series",
+                "genres": [{ "name": "Comedy" }, { "name": "Documentary" }],
+                "keywords": {
+                    "results": [
+                        { "name": "miniseries" },
+                        { "name": "mockumentary" },
+                        { "name": "deadpan" },
+                        { "name": "film history" }
+                    ]
+                },
+                "number_of_seasons": 1,
+                "number_of_episodes": 3,
+                "aggregate_credits": {
+                    "cast": [{ "roles": [{ "character": "Philomena Cunk" }] }]
+                }
+            })),
+            tmdb_error: None,
+            tvdb: Some(json!({
+                "extended": {
+                    "data": {
+                        "name": "Cunk on Cinema",
+                        "genres": [
+                            { "name": "Comedy" },
+                            { "name": "Documentary" },
+                            { "name": "History" },
+                            { "name": "Mini-Series" }
+                        ],
+                        "tags": [
+                            { "name": "Docuseries" },
+                            { "name": "Satire" },
+                            { "name": "Spoof" }
+                        ],
+                        "status": { "name": "Continuing" }
+                    }
+                }
+            })),
+            tvdb_error: None,
+        }
+        .classification_metadata();
+        let root_folders = default_regression_root_folders();
+        let eligible = eligible_root_folders(&metadata, &root_folders);
+
+        assert!(!metadata.has_explicit_documentary_evidence());
+        assert_eq!(eligible, vec![root_folders[4].clone()]);
     }
 
     #[test]

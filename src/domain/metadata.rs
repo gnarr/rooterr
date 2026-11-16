@@ -91,10 +91,21 @@ impl ClassificationMetadata {
     }
 
     pub fn has_explicit_documentary_evidence(&self) -> bool {
+        // Mockumentaries are scripted comedies that providers tag with the
+        // documentary format they parody, so their documentary labels are not
+        // evidence of a factual series.
+        !self.has_mockumentary_evidence()
+            && std::iter::once(&self.sonarr)
+                .chain(self.tmdb.iter())
+                .chain(self.tvdb.iter())
+                .any(CompactSeriesMetadata::has_explicit_documentary_evidence)
+    }
+
+    pub fn has_mockumentary_evidence(&self) -> bool {
         std::iter::once(&self.sonarr)
             .chain(self.tmdb.iter())
             .chain(self.tvdb.iter())
-            .any(CompactSeriesMetadata::has_explicit_documentary_evidence)
+            .any(CompactSeriesMetadata::has_mockumentary_evidence)
     }
 
     pub fn has_strong_explicit_documentary_evidence(&self) -> bool {
@@ -308,6 +319,14 @@ impl CompactSeriesMetadata {
             || self.has_self_cast_documentary_evidence()
     }
 
+    fn has_mockumentary_evidence(&self) -> bool {
+        self.genres
+            .iter()
+            .chain(self.keywords.iter())
+            .chain(self.tags.iter())
+            .any(|value| is_mockumentary_label(value))
+    }
+
     pub fn has_explicit_miniseries_evidence(&self) -> bool {
         self.series_type
             .as_deref()
@@ -381,6 +400,18 @@ fn is_explicit_documentary_label(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "documentary" | "documentaries" | "docuseries" | "docu-series"
+    )
+}
+
+fn is_mockumentary_label(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "mockumentary"
+            | "mockumentaries"
+            | "mock documentary"
+            | "mock-documentary"
+            | "spoof"
+            | "parody"
     )
 }
 
@@ -1332,13 +1363,7 @@ mod tests {
         .classification_metadata();
 
         assert!(reality.has_explicit_reality_evidence());
-        assert!(
-            reality
-                .tmdb
-                .as_ref()
-                .expect("tmdb")
-                .has_self_cast_evidence
-        );
+        assert!(reality.tmdb.as_ref().expect("tmdb").has_self_cast_evidence);
         assert!(!reality.has_explicit_documentary_evidence());
         assert!(!reality.has_strong_explicit_documentary_evidence());
     }
